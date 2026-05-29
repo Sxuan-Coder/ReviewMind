@@ -47,6 +47,43 @@ export const mockChangedFiles: ChangedFile[] = [
     deletions: 8,
     changes: 53,
     risk_count: 2,
+    old_code: `class OrderService:
+    def create_order(self, user_id: int, items: list[OrderItem]) -> Order:
+        """Create a new order with inventory validation."""
+        user = self.user_repo.get_by_id(user_id)
+        if not user:
+            raise NotFoundError("User not found")
+
+        total = 0
+        for item in items:
+            if item.quantity <= 0:
+                raise ValidationError("Invalid quantity")
+
+            total += item.price * item.quantity
+
+        order = Order(user_id=user_id, items=items, total=total)
+        return self.order_repo.save(order)`,
+    new_code: `class OrderService:
+    def create_order(self, user_id: int, items: list[OrderItem]) -> Order:
+        """Create a new order with inventory validation."""
+        user = self.user_repo.get_by_id_with_orders(user_id)
+        if not user:
+            raise NotFoundError("User not found")
+
+        total = 0
+        for item in items:
+            if item.quantity <= 0:
+                raise ValidationError("Invalid quantity")
+
+            # Check inventory
+            inventory = self.inventory_repo.get_by_product_id(item.product_id)
+            if inventory.available < item.quantity:
+                raise InsufficientStockError(f"Insufficient stock for {item.product_id}")
+
+            total += item.price * item.quantity
+
+        order = Order(user_id=user_id, items=items, total=total)
+        return self.order_repo.save(order)`,
     patch: `@@ -30,7 +30,7 @@ class OrderService:
      def create_order(self, user_id: int, items: list[OrderItem]) -> Order:
          """Create a new order with inventory validation."""
@@ -75,6 +112,23 @@ export const mockChangedFiles: ChangedFile[] = [
     deletions: 2,
     changes: 10,
     risk_count: 1,
+    old_code: `<mapper namespace="order">
+    <select id="selectOrderByUserId" resultMap="orderResultMap">
+        SELECT * FROM orders WHERE user_id = \${userId}
+    </select>
+</mapper>`,
+    new_code: `<mapper namespace="order">
+    <select id="selectOrderByUserId" resultMap="orderResultMap">
+        SELECT * FROM orders WHERE user_id = \${userId} AND status != 'deleted'
+    </select>
+
+    <select id="selectOrdersByIds" resultMap="orderResultMap">
+        SELECT * FROM orders WHERE id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </select>
+</mapper>`,
     patch: `@@ -15,9 +15,15 @@
      <select id="selectOrderByUserId" resultMap="orderResultMap">
 -        SELECT * FROM orders WHERE user_id = \${userId}
