@@ -1,0 +1,239 @@
+"""LangGraph Review Workflow：将 pipeline + mock agents 编排为有序图节点。
+
+使用方式：
+    graph = ReviewGraph(store, github_client)
+    result = await graph.run(job)
+
+图节点顺序：
+    fetch_pr → fetch_files → diff_filter → parse_diff → ast_context
+    → summary_agent → security_agent → performance_agent → test_agent
+    → risk_judge → report_agent
+
+非关键节点（ast_context、各 agent）失败不阻塞整体流程，记录 warning。
+关键节点（fetch_pr、fetch_files）失败直接标记 job failed。
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+from app.graph.nodes import (
+    node_ast_context,
+    node_diff_filter,
+    node_fetch_files_async,
+    node_fetch_pr_async,
+    node_parse_diff,
+    node_performance_agent,
+    node_report_agent,
+    node_risk_judge,
+    node_security_agent,
+    node_summary_agent,
+    node_test_agent,
+)
+from app.graph.state import ReviewGraphState
+from app.models.review_job import ReviewJob
+from app.schemas.review import (
+    ChangedFile,
+    ReviewJobStatus,
+    ReviewReport,
+    ReviewReportStats,
+)
+from app.services.github_client import GitHubClient
+from app.services.review_job_store import ReviewJobStore
+
+
+@dataclass
+class ReviewGraphResult:
+    pr_info: dict[str, Any]
+    filtered_files: dict[str, Any]
+    parsed_diff: list[dict[str, Any]]
+    warnings: list[str]
+
+
+# 关键节点：失败后不再继续
+_CRITICAL_NODES = {"fetch_pr", "fetch_files"}
+
+# 节点执行顺序
+_NODE_ORDER = [
+    "fetch_pr",
+    "fetch_files",
+    "diff_filter",
+    "parse_diff",
+    "ast_context",
+    "summary_agent",
+    "security_agent",
+    "performance_agent",
+    "test_agent",
+    "risk_judge",
+    "report_agent",
+]
+
+# 节点名称 → 显示名（用于 progress 事件）
+_NODE_DISPLAY: dict[str, tuple[str, str]] = {
+    "fetch_pr": ("FETCH_PR", "正在拉取 GitHub PR 信息"),
+    "fetch_files": ("FETCH_FILES", "正在拉取 PR 文件列表"),
+    "diff_filter": ("DIFF_FILTER", "正在过滤无意义 Diff"),
+    "parse_diff": ("DIFF_PARSE", "正在解析变更行"),
+    "ast_context": ("AST_CONTEXT", "正在提取 AST 上下文"),
+    "summary_agent": ("SUMMARY_AGENT", "Summary Agent 运行中"),
+    "security_agent": ("SECURITY_AGENT", "Security Agent 运行中"),
+    "performance_agent": ("PERFORMANCE_AGENT", "Performance Agent 运行中"),
+    "test_agent": ("TEST_AGENT", "Test Agent 运行中"),
+    "risk_judge": ("RISK_JUDGE", "风险聚合中"),
+    "report_agent": ("REPORT_AGENT", "生成报告中"),
+}
+
+# 节点百分比
+_NODE_PERCENT: dict[str, int] = {
+    "fetch_pr": 15,
+    "fetch_files": 30,
+    "diff_filter": 45,
+    "parse_diff": 55,
+    "ast_context": 62,
+    "summary_agent": 70,
+    "security_agent": 75,
+    "performance_agent": 80,
+    "test_agent": 85,
+    "risk_judge": 92,
+    "report_agent": 98,
+}
+
+
+class ReviewGraph:
+    def __init__(self, store: ReviewJobStore, github_client: GitHubClient | None = None) -> None:
+        self._store = store
+        self._github_client = github_client or GitHubClient()
+
+    async def run(self, job: ReviewJob) -> ReviewGraphResult:
+        """执行完整的 review graph 工作流。"""
+        state = ReviewGraphState(job_id=job.job_id, pr_url=job.pr_url)
+        self._store.update_status(job.job_id, ReviewJobStatus.running)
+
+        for node_name in _NODE_ORDER:
+            if state.error and node_name in _CRITICAL_NODES:
+                # 关键节点已失败，跳过剩余关键节点，但仍可执行非关键节点
+                continue
+            if state.error and node_name not in _CRITICAL_NODES:
+                # 非关键节点跳过（上游关键失败）
+                break
+
+            display_step, display_msg = _NODE_DISPLAY.get(node_name, (node_name.upper(), node_name))
+            percent = _NODE_PERCENT.get(node_name, 50)
+            self._add_progress(job.job_id, display_step, percent, display_msg)
+
+            state = await self._run_node(node_name, state)
+
+            if state.error and node_name in _CRITICAL_NODES:
+                self._store.update_status(job.job_id, ReviewJobStatus.failed, error_message=state.error)
+                self._add_progress(
+                    job.job_id, f"{display_step}_FAILED", percent,
+                    state.error,
+                    event_type="warning",
+                )
+                return ReviewGraphResult(
+                    pr_info=state.pr_info,
+                    filtered_files=state.filtered_files,
+                    parsed_diff=state.parsed_diff,
+                    warnings=state.warnings,
+                )
+
+        # 所有节点完成 → 构建报告
+        self._finish(job.job_id, state)
+        return ReviewGraphResult(
+            pr_info=state.pr_info,
+            filtered_files=state.filtered_files,
+            parsed_diff=state.parsed_diff,
+            warnings=state.warnings,
+        )
+
+    async def _run_node(self, node_name: str, state: ReviewGraphState) -> ReviewGraphState:
+        gc = self._github_client
+        st = self._store
+        dispatch = {
+            "fetch_pr": lambda s: node_fetch_pr_async(s, gc, st),
+            "fetch_files": lambda s: node_fetch_files_async(s, gc, st),
+            "diff_filter": lambda s: _sync(node_diff_filter, s, gc, st),
+            "parse_diff": lambda s: _sync(node_parse_diff, s, gc, st),
+            "ast_context": lambda s: _sync(node_ast_context, s, gc, st),
+            "summary_agent": lambda s: _sync(node_summary_agent, s, gc, st),
+            "security_agent": lambda s: _sync(node_security_agent, s, gc, st),
+            "performance_agent": lambda s: _sync(node_performance_agent, s, gc, st),
+            "test_agent": lambda s: _sync(node_test_agent, s, gc, st),
+            "risk_judge": lambda s: _sync(node_risk_judge, s, gc, st),
+            "report_agent": lambda s: _sync(node_report_agent, s, gc, st),
+        }
+        handler = dispatch.get(node_name)
+        if handler is None:
+            return state
+        return await handler(state)
+
+    def _finish(self, job_id: str, state: ReviewGraphState) -> None:
+        """将 graph 输出组装为 ReviewReport 并保存到 store。"""
+        changed_files = [
+            ChangedFile(
+                filename=f["filename"],
+                status=f.get("status", "unknown"),
+                additions=f.get("additions", 0),
+                deletions=f.get("deletions", 0),
+            )
+            for f in state.filtered_files.get("included_files", [])
+        ]
+
+        if state.report_output:
+            output = state.report_output
+            report = ReviewReport(
+                summary=output.summary,
+                risk_level=output.risk_level,
+                stats=ReviewReportStats(
+                    critical=0,
+                    high=0,
+                    medium=0,
+                    low=0,
+                    suggestion=0,
+                ),
+                changed_files=changed_files,
+                changed_symbols=[],
+                findings=output.findings,
+                review_comment=output.review_comment,
+            )
+        else:
+            # 降级：无 report output 时生成基础报告
+            report = ReviewReport(
+                summary=state.summary_text or f"PR 分析完成，共 {len(state.parsed_diff)} 个文件。",
+                risk_level="LOW",
+                stats=ReviewReportStats(),
+                changed_files=changed_files,
+                changed_symbols=[],
+                findings=[],
+                review_comment="## AI Review Summary\n\n基础分析完成。",
+            )
+
+        # 更新 stats
+        if state.aggregated_risk:
+            for f in state.aggregated_risk.findings:
+                level = f.level.upper()
+                if level == "CRITICAL":
+                    report.stats.critical += 1
+                elif level == "HIGH":
+                    report.stats.high += 1
+                elif level in ("MEDIUM", "WARNING"):
+                    report.stats.medium += 1
+                elif level == "LOW":
+                    report.stats.low += 1
+                else:
+                    report.stats.suggestion += 1
+
+        self._store.update_status(job_id, ReviewJobStatus.completed, report=report)
+        self._add_progress(job_id, "DONE", 100, "Review Graph 工作流已完成")
+
+    def _add_progress(self, job_id: str, step: str, percent: int, message: str, event_type: str = "progress") -> None:
+        self._store.add_progress_event(
+            job_id,
+            {"type": event_type, "step": step, "percent": percent, "message": message},
+        )
+
+
+async def _sync(fn, state: ReviewGraphState, github_client, store) -> ReviewGraphState:
+    """将同步节点包装为协程。"""
+    return fn(state, github_client, store)
