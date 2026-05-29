@@ -1,4 +1,14 @@
+"""ReviewJobService：创建、查询、取消 ReviewJob。
+
+create_job 采用 async fire-and-forget 模式：
+  1. 立即创建 job（状态 pending）
+  2. 通过 asyncio.create_task 后台执行 pipeline
+  3. 接口快速返回 CreateReviewJobResponse
+"""
+
 from uuid import uuid4
+
+import asyncio
 
 from fastapi import HTTPException, status
 
@@ -16,12 +26,19 @@ from app.schemas.review import (
 )
 from app.services.review_job_store import ReviewJobNotFoundError, ReviewJobStore, review_job_store
 from app.services.review_pipeline import ReviewPipeline
+from app.services.review_task_runner import ReviewTaskRunner
 
 
 class ReviewJobService:
-    def __init__(self, store: ReviewJobStore, pipeline: ReviewPipeline | None = None) -> None:
+    def __init__(
+        self,
+        store: ReviewJobStore,
+        pipeline: ReviewPipeline | None = None,
+        task_runner: ReviewTaskRunner | None = None,
+    ) -> None:
         self._store = store
         self._pipeline = pipeline or ReviewPipeline(store)
+        self._task_runner = task_runner
 
     async def create_job(self, request: CreateReviewJobRequest) -> CreateReviewJobResponse:
         job_id = f"rev_{uuid4().hex[:8]}"
@@ -31,14 +48,22 @@ class ReviewJobService:
             job_id,
             {"step": "JOB_CREATED", "percent": 0, "message": "Review Job 已创建"},
         )
-        await self._pipeline.run(job)
-        current = self._store.get(job.job_id)
+        # 后台执行 pipeline，接口不等待
+        if self._task_runner is not None:
+            await self._task_runner.submit(job, self._make_pipeline_coro)
+        else:
+            asyncio.create_task(self._pipeline.run(job))
+
         return CreateReviewJobResponse(
-            job_id=current.job_id,
-            status=current.status,
-            stream_url=f"/api/v1/review/stream/{current.job_id}",
-            report_url=f"/api/v1/review/jobs/{current.job_id}",
+            job_id=job_id,
+            status=ReviewJobStatus.pending,
+            stream_url=f"/api/v1/review/stream/{job_id}",
+            report_url=f"/api/v1/review/jobs/{job_id}",
         )
+
+    async def _make_pipeline_coro(self, job: ReviewJob):
+        """构建 pipeline 协程，供 task_runner 调用。"""
+        return await self._pipeline.run(job)
 
     def get_report(self, job_id: str) -> ReviewReport:
         job = self._get_job_or_404(job_id)
