@@ -62,6 +62,10 @@ class ReviewJobStore:
         job.mark_updated()
         return job
 
+    def get_progress_events(self, job_id: str) -> list[dict[str, object]]:
+        job = self.get(job_id)
+        return list(job.progress_events)
+
     def save_pipeline_result(self, job_id: str, result: object) -> ReviewJob:
         job = self.get(job_id)
         if hasattr(result, "__dict__"):
