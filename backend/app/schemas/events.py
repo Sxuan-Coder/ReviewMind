@@ -6,9 +6,11 @@ from pydantic import BaseModel, Field
 
 class ReviewEventType(StrEnum):
     progress = "progress"
+    chunk = "chunk"
     finding = "finding"
     warning = "warning"
     done = "done"
+    error = "error"
 
 
 class ReviewStreamEvent(BaseModel):

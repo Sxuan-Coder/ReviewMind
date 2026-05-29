@@ -1,3 +1,5 @@
+from uuid import uuid4
+
 from app.schemas.agents import AgentContext, AgentFindingsResult
 from app.schemas.review import ReviewFinding
 
@@ -9,6 +11,7 @@ def run(context: AgentContext) -> AgentFindingsResult:
         if file.startswith("test") or "test" in file.lower():
             findings.append(
                 ReviewFinding(
+                    id=f"finding_{uuid4().hex[:8]}",
                     agent="test_agent",
                     file=file,
                     line=1,

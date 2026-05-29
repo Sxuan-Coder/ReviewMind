@@ -6,6 +6,7 @@ from app.models.review_job import ReviewJob
 from app.schemas.review import (
     CreateReviewJobRequest,
     CreateReviewJobResponse,
+    ReviewJobDetailResponse,
     ReviewJobSnapshot,
     ReviewJobStatus,
     ReviewReport,
@@ -32,16 +33,56 @@ class ReviewJobService:
             job_id=job.job_id,
             status=self._store.get(job.job_id).status,
             stream_url=f"/api/v1/review/stream/{job.job_id}",
+            report_url=f"/api/v1/review/jobs/{job.job_id}",
+        )
+
+    def get_job_detail(self, job_id: str) -> ReviewJobDetailResponse:
+        """对齐文档 4.2：GET /review/jobs/{job_id} 的完整响应。"""
+        job = self._get_job_or_404(job_id)
+
+        # 构建 pr 信息
+        pr_info = None
+        if job.pr_info:
+            pr_info = {
+                "owner": job.pr_info.get("owner", ""),
+                "repo": job.pr_info.get("repo", ""),
+                "number": job.pr_info.get("pull_number", 0),
+                "title": job.pr_info.get("title", ""),
+                "author": job.pr_info.get("author", ""),
+                "base_branch": job.pr_info.get("base", {}).get("ref", "") if isinstance(job.pr_info.get("base"), dict) else "",
+                "head_branch": job.pr_info.get("head", {}).get("ref", "") if isinstance(job.pr_info.get("head"), dict) else "",
+                "html_url": job.pr_info.get("html_url", ""),
+            }
+
+        # 最新进度
+        progress = None
+        if job.progress_events:
+            last = job.progress_events[-1]
+            progress = {
+                "step": last.get("step", "UNKNOWN"),
+                "percent": last.get("percent", 0),
+                "message": last.get("message", ""),
+                "type": last.get("type", "progress"),
+            }
+
+        return ReviewJobDetailResponse(
+            job_id=job.job_id,
+            status=job.status,
+            pr=pr_info,
+            progress=progress,
+            findings=[f for f in (job.report.findings if job.report else [])],
+            report=job.report,
+            created_at=job.created_at,
+            completed_at=job.completed_at,
         )
 
     def get_report(self, job_id: str) -> ReviewReport:
+        """兼容旧接口调用，直接返回报告。"""
         job = self._get_job_or_404(job_id)
         if job.report is not None:
             return job.report
 
         return ReviewReport(
-            job_id=job.job_id,
-            status=job.status,
             summary="ReviewMind 已创建任务。真实 PR 拉取、Diff 解析和多 Agent 审查将在后续 PR 中接入。",
             risk_level="LOW",
             findings=[],
@@ -60,6 +101,11 @@ class ReviewJobService:
             progress_events=job.progress_events,
             pipeline_result=job.pipeline_result,
         )
+
+    def cancel_job(self, job_id: str) -> ReviewJobDetailResponse:
+        job = self._get_job_or_404(job_id)
+        self._store.update_status(job_id, ReviewJobStatus.cancelled)
+        return self.get_job_detail(job_id)
 
     def _get_job_or_404(self, job_id: str) -> ReviewJob:
         try:

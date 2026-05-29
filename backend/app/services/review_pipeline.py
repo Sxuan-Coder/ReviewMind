@@ -4,7 +4,7 @@ from typing import Any
 from app.models.review_job import ReviewJob
 from app.schemas.diff import PullRequestFile
 from app.schemas.github import GitHubPullRequestFile
-from app.schemas.review import ReviewJobStatus, ReviewReport
+from app.schemas.review import ReviewJobStatus, ReviewReport, ReviewReportStats
 from app.services.diff_filter import filter_diff_files
 from app.services.diff_parser import parse_diff_file
 from app.services.github_client import GitHubClient
@@ -27,10 +27,11 @@ class ReviewPipeline:
     async def run(self, job: ReviewJob) -> ReviewPipelineResult:
         try:
             self._store.update_status(job.job_id, ReviewJobStatus.running)
-            self._add_progress(job.job_id, "PARSE_PR_URL", 10, "GitHub PR URL 已解析")
+            self._add_progress(job.job_id, "FETCH_PR", 10, "正在拉取 GitHub PR 信息")
 
             pr_ref = parse_github_pr_url(job.pr_url)
             pr_info = await self._github_client.fetch_pull_request(pr_ref)
+            self._store.save_pr_info(job.job_id, pr_info.model_dump(mode="json"))
             self._add_progress(job.job_id, "FETCH_PR", 30, "GitHub PR 基本信息已拉取")
 
             github_files = await self._github_client.fetch_pull_request_files(pr_ref)
@@ -43,6 +44,18 @@ class ReviewPipeline:
             parsed_diff = [parse_diff_file(file) for file in filtered.included_files]
             self._add_progress(job.job_id, "DIFF_PARSE", 85, "Diff 变更行解析已完成")
 
+            # 构建 changed_files 列表
+            changed_files = [
+                {
+                    "filename": f.filename,
+                    "status": f.status,
+                    "additions": f.additions,
+                    "deletions": f.deletions,
+                    "risk_count": 0,
+                }
+                for f in filtered.included_files
+            ]
+
             result = ReviewPipelineResult(
                 pr_info=pr_info.model_dump(mode="json"),
                 filtered_files=filtered.model_dump(mode="json"),
@@ -51,15 +64,16 @@ class ReviewPipeline:
             self._store.save_pipeline_result(job.job_id, result)
 
             report = ReviewReport(
-                job_id=job.job_id,
-                status=ReviewJobStatus.completed,
                 summary=f"已完成 PR #{pr_info.pull_number} 的基础 Diff 分析，共保留 {len(filtered.included_files)} 个文件。",
                 risk_level="LOW",
+                stats=ReviewReportStats(),
+                changed_files=changed_files,
+                changed_symbols=[],
                 findings=[],
                 review_comment="## AI Review Summary\n\n基础 Review Pipeline 已完成，后续 PR 将接入 Mock Agents 和风险聚合。",
             )
             self._store.update_status(job.job_id, ReviewJobStatus.completed, report=report)
-            self._add_progress(job.job_id, "PIPELINE_DONE", 100, "Review Pipeline 已完成")
+            self._add_progress(job.job_id, "DONE", 100, "Review Pipeline 已完成")
             return result
         except Exception as exc:
             self._store.update_status(job.job_id, ReviewJobStatus.failed, error_message=str(exc))

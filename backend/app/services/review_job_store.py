@@ -17,10 +17,11 @@ class InvalidReviewJobTransitionError(Exception):
 
 class ReviewJobStore:
     allowed_transitions: dict[ReviewJobStatus, set[ReviewJobStatus]] = {
-        ReviewJobStatus.pending: {ReviewJobStatus.running, ReviewJobStatus.failed},
-        ReviewJobStatus.running: {ReviewJobStatus.completed, ReviewJobStatus.failed},
+        ReviewJobStatus.pending: {ReviewJobStatus.running, ReviewJobStatus.failed, ReviewJobStatus.cancelled},
+        ReviewJobStatus.running: {ReviewJobStatus.completed, ReviewJobStatus.failed, ReviewJobStatus.cancelled},
         ReviewJobStatus.completed: set(),
         ReviewJobStatus.failed: set(),
+        ReviewJobStatus.cancelled: set(),
     }
 
     def __init__(self) -> None:
@@ -35,6 +36,9 @@ class ReviewJobStore:
         if job is None:
             raise ReviewJobNotFoundError(job_id)
         return job
+
+    def get_all(self) -> list[ReviewJob]:
+        return list(self._jobs.values())
 
     def update_status(
         self,
@@ -53,6 +57,14 @@ class ReviewJobStore:
         job.error_message = error_message
         if report is not None:
             job.report = report
+        if status == ReviewJobStatus.completed:
+            job.mark_completed()
+        job.mark_updated()
+        return job
+
+    def save_pr_info(self, job_id: str, pr_info: dict) -> ReviewJob:
+        job = self.get(job_id)
+        job.pr_info = pr_info
         job.mark_updated()
         return job
 
