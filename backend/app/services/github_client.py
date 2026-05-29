@@ -86,7 +86,7 @@ def _handle_response(response: httpx.Response) -> Any:
     if response.status_code == 403:
         raise GitHubClientError("GitHub API rate limit or permission denied", status_code=403)
     if response.status_code == 404:
-        raise GitHubClientError("GitHub pull request was not found", status_code=404)
+        raise GitHubClientError("GitHub pull request was not found (如果是私有仓库，请配置 GITHUB_TOKEN)", status_code=404)
     if response.status_code >= 400:
         raise GitHubClientError("GitHub API request failed", status_code=response.status_code)
     return response.json()

@@ -162,5 +162,8 @@ export async function getPrPreview(
   }
 
   const result: ApiResponse<PullRequestInfo> = await response.json();
+  if (result.code !== 20000 || !result.data) {
+    throw new Error(result.message || 'PR 预览获取失败');
+  }
   return result.data;
 }

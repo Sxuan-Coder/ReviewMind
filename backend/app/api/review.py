@@ -13,7 +13,7 @@ from app.schemas.review import (
     ReviewJobDetailResponse,
     ReviewJobSnapshot,
 )
-from app.services.github_client import GitHubClient
+from app.services.github_client import GitHubClient, GitHubClientError
 from app.services.github_url_parser import GitHubPullRequestUrlError, parse_github_pr_url
 from app.services.review_job_service import review_job_service
 
@@ -140,8 +140,13 @@ async def pr_preview(body: dict) -> ApiResponse[dict]:
         ref = parse_github_pr_url(pr_url)
     except GitHubPullRequestUrlError as exc:
         return success_response(None, message=str(exc), code=40001)
-    pr_info = await github_client.fetch_pull_request(ref)
-    files = await github_client.fetch_pull_request_files(ref)
+    try:
+        pr_info = await github_client.fetch_pull_request(ref)
+        files = await github_client.fetch_pull_request_files(ref)
+    except GitHubClientError as exc:
+        error_map = {404: 40400, 401: 40100, 403: 40300}
+        code = error_map.get(exc.status_code or 0, 50000)
+        return success_response(None, message=str(exc), code=code)
     pr_data = {
         "owner": pr_info.owner,
         "repo": pr_info.repo,
