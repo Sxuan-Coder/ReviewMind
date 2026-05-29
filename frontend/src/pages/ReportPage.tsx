@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useReviewStore } from '../store/reviewStore';
 import { getJobDetail } from '../services/reviewApi';
@@ -7,10 +7,10 @@ import { FindingCard } from '../components/FindingCard';
 import { FileChangeList } from '../components/FileChangeList';
 import { ReviewCommentBox } from '../components/ReviewCommentBox';
 import { NavHeader } from '../components/NavHeader';
-import type { JobDetailResponse } from '../types';
+import type { ChangedFile, Finding, JobDetailResponse } from '../types';
 import { cn } from '../lib/utils';
 
-type ReportTab = 'overview' | 'findings' | 'files' | 'symbols';
+type ReportTab = 'overview' | 'findings' | 'files' | 'symbols' | 'diff';
 
 export function ReportPage() {
   const { jobId } = useParams<{ jobId: string }>();
@@ -24,6 +24,11 @@ export function ReportPage() {
   const [activeTab, setActiveTab] = useState<ReportTab>('overview');
   const [expandedFindings, setExpandedFindings] = useState<Set<string>>(new Set());
 
+  // Diff state
+  const [diffFile, setDiffFile] = useState<ChangedFile | null>(null);
+  const [highlightLine, setHighlightLine] = useState<number | null>(null);
+  const diffContainerRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     if (detail) return;
     if (!jobId) {
@@ -36,6 +41,11 @@ export function ReportPage() {
       .then((data) => {
         setDetail(data);
         setLoading(false);
+        // Default diff file to the first one with code
+        const firstWithDiff = data.report?.changed_files?.find(
+          (f) => f.old_code || f.new_code || f.patch,
+        );
+        if (firstWithDiff) setDiffFile(firstWithDiff);
       })
       .catch((err) => {
         setError(err instanceof Error ? err.message : '加载报告失败');
@@ -50,6 +60,43 @@ export function ReportPage() {
       else next.add(id);
       return next;
     });
+  }
+
+  /** Click a finding → jump to diff tab and highlight its line */
+  function jumpToDiff(finding: Finding) {
+    // Find the matching file
+    const file = detail?.report?.changed_files?.find((f) => f.filename === finding.file);
+    if (file) setDiffFile(file);
+    setHighlightLine(finding.line);
+    setActiveTab('diff');
+    // Scroll to line after render
+    setTimeout(() => {
+      const el = diffContainerRef.current?.querySelector(`[data-line="${finding.line}"]`);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 200);
+  }
+
+  // Files with diff data
+  const filesWithDiff = useMemo(
+    () => detail?.report?.changed_files?.filter((f) => f.patch || f.old_code || f.new_code) ?? [],
+    [detail],
+  );
+
+  // Render simple inline diff view
+  function renderDiffView(file: ChangedFile | null) {
+    if (!file) {
+      return <p className="text-gray-500 text-center py-8">请选择一个文件查看 Diff</p>;
+    }
+
+    if (file.old_code && file.new_code) {
+      return renderSideBySideDiff(file.old_code, file.new_code, file.filename);
+    }
+
+    if (file.patch) {
+      return renderPatchView(file.patch);
+    }
+
+    return <p className="text-gray-500 text-center py-8">该文件暂无 Diff 数据</p>;
   }
 
   if (loading) {
@@ -89,6 +136,7 @@ export function ReportPage() {
     { key: 'findings', label: '风险发现', count: report?.findings?.length ?? 0 },
     { key: 'files', label: '变更文件', count: report?.changed_files?.length ?? 0 },
     { key: 'symbols', label: '变更方法', count: report?.changed_symbols?.length ?? 0 },
+    { key: 'diff', label: 'Diff 视图' },
   ];
 
   return (
@@ -131,7 +179,6 @@ export function ReportPage() {
         <div className="md:col-span-1">
           <RiskSummary riskLevel={report?.risk_level} stats={report?.stats} />
 
-          {/* Job meta */}
           <div className="timeline-card mt-5">
             <div className="section-label">任务信息</div>
             <div className="mt-3 space-y-2 text-sm">
@@ -232,6 +279,7 @@ export function ReportPage() {
                     finding={f}
                     expanded={expandedFindings.has(f.id)}
                     onToggle={() => toggleFinding(f.id)}
+                    onJumpToDiff={() => jumpToDiff(f)}
                   />
                 ))
               )}
@@ -290,8 +338,215 @@ export function ReportPage() {
               )}
             </div>
           )}
+
+          {/* Tab: Diff */}
+          {activeTab === 'diff' && (
+            <div className="animate-fade-in">
+              {/* File selector */}
+              {filesWithDiff.length > 1 && (
+                <div className="flex items-center gap-2 mb-4 overflow-x-auto pb-2">
+                  {filesWithDiff.map((f) => (
+                    <button
+                      key={f.filename}
+                      onClick={() => {
+                        setDiffFile(f);
+                        setHighlightLine(null);
+                      }}
+                      className={cn(
+                        'shrink-0 rounded-lg border px-3 py-1.5 text-xs font-mono transition-colors',
+                        diffFile?.filename === f.filename
+                          ? 'border-cyan-500/40 bg-cyan-950/20 text-cyan-400'
+                          : 'border-gray-700/20 text-gray-500 hover:text-gray-300',
+                      )}
+                    >
+                      {f.filename.split('/').pop()}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              <div ref={diffContainerRef} className="rounded-xl border border-gray-700/20 overflow-hidden">
+                {renderDiffView(diffFile)}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
+}
+
+// ============ Inline Diff Renderers ============
+
+function renderSideBySideDiff(oldCode: string, newCode: string, filename: string) {
+  const oldLines = oldCode.split('\n');
+  const newLines = newCode.split('\n');
+  const maxLines = Math.max(oldLines.length, newLines.length);
+
+  // Simple LCS-based diff for line matching
+  const diffRows = computeLineDiff(oldLines, newLines);
+
+  const ext = filename.split('.').pop()?.toLowerCase() || '';
+  const langClass = ext;
+
+  return (
+    <div className="overflow-auto max-h-[70vh]">
+      <table className="w-full text-xs font-mono border-collapse">
+        <thead>
+          <tr className="bg-gray-900/80 text-gray-500 sticky top-0 z-10">
+            <th className="w-12 px-2 py-1.5 text-right border-r border-gray-700/30">旧</th>
+            <th className="px-3 py-1.5 text-left border-r border-gray-700/30">旧版本</th>
+            <th className="w-12 px-2 py-1.5 text-right border-r border-gray-700/30">新</th>
+            <th className="px-3 py-1.5 text-left">新版本</th>
+          </tr>
+        </thead>
+        <tbody>
+          {diffRows.map((row, i) => (
+            <tr
+              key={i}
+              className={cn(
+                'border-b border-gray-800/50',
+                row.type === 'add' && 'bg-emerald-950/15',
+                row.type === 'remove' && 'bg-red-950/15',
+                row.type === 'equal' && '',
+              )}
+            >
+              <td className="w-12 px-2 py-0.5 text-right text-gray-600 border-r border-gray-700/30 select-none">
+                {row.type !== 'add' ? row.oldLine : ''}
+              </td>
+              <td
+                className={cn(
+                  'px-3 py-0.5 border-r border-gray-700/30 whitespace-pre-wrap',
+                  row.type === 'remove' ? 'text-red-400/80 bg-red-950/10' : 'text-gray-400',
+                )}
+                data-line={row.oldLine}
+              >
+                {row.type === 'remove' && <span className="select-none mr-2 text-red-600">-</span>}
+                {row.type !== 'add' ? row.content : ''}
+              </td>
+              <td className="w-12 px-2 py-0.5 text-right text-gray-600 border-r border-gray-700/30 select-none">
+                {row.type !== 'remove' ? row.newLine : ''}
+              </td>
+              <td
+                className={cn(
+                  'px-3 py-0.5 whitespace-pre-wrap',
+                  row.type === 'add' ? 'text-emerald-400/80 bg-emerald-950/10' : 'text-gray-300',
+                )}
+                data-line={row.newLine}
+              >
+                {row.type === 'add' && <span className="select-none mr-2 text-emerald-600">+</span>}
+                {row.type !== 'remove' ? row.content : ''}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function renderPatchView(patch: string) {
+  const lines = patch.split('\n');
+  return (
+    <div className="overflow-auto max-h-[70vh] p-3 font-mono text-xs">
+      {lines.map((line, i) => {
+        const isAdd = line.startsWith('+');
+        const isDel = line.startsWith('-');
+        const isHunk = line.startsWith('@@');
+        return (
+          <div
+            key={i}
+            className={cn(
+              'whitespace-pre-wrap py-0.5',
+              isAdd && 'text-emerald-400/80 bg-emerald-950/10',
+              isDel && 'text-red-400/80 bg-red-950/10',
+              isHunk && 'text-cyan-400/60',
+              !isAdd && !isDel && !isHunk && 'text-gray-500',
+            )}
+          >
+            {line}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ============ Simple Line Diff ============
+
+interface DiffRow {
+  type: 'equal' | 'add' | 'remove';
+  content: string;
+  oldLine: number;
+  newLine: number;
+}
+
+function computeLineDiff(oldLines: string[], newLines: string[]): DiffRow[] {
+  const rows: DiffRow[] = [];
+  // Simple approach: use LCS to match lines
+  const lcs = longestCommonSubsequence(oldLines, newLines);
+
+  let oi = 0;
+  let ni = 0;
+  let li = 0;
+
+  while (oi < oldLines.length || ni < newLines.length) {
+    if (li < lcs.length && oi < oldLines.length && oldLines[oi] === lcs[li]) {
+      // Match: check if we need to catch up new side
+      while (ni < newLines.length && newLines[ni] !== lcs[li]) {
+        rows.push({ type: 'add', content: newLines[ni], oldLine: 0, newLine: ni + 1 });
+        ni++;
+      }
+      rows.push({ type: 'equal', content: lcs[li], oldLine: oi + 1, newLine: ni + 1 });
+      oi++;
+      ni++;
+      li++;
+    } else if (li < lcs.length && ni < newLines.length && newLines[ni] === lcs[li]) {
+      // Old has extra line (removed)
+      rows.push({ type: 'remove', content: oldLines[oi], oldLine: oi + 1, newLine: 0 });
+      oi++;
+    } else if (oi < oldLines.length && li < lcs.length && oldLines[oi] !== lcs[li]) {
+      rows.push({ type: 'remove', content: oldLines[oi], oldLine: oi + 1, newLine: 0 });
+      oi++;
+    } else if (ni < newLines.length) {
+      rows.push({ type: 'add', content: newLines[ni], oldLine: 0, newLine: ni + 1 });
+      ni++;
+    } else {
+      break;
+    }
+  }
+
+  return rows;
+}
+
+function longestCommonSubsequence(a: string[], b: string[]): string[] {
+  const m = a.length;
+  const n = b.length;
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      if (a[i - 1] === b[j - 1]) {
+        dp[i][j] = dp[i - 1][j - 1] + 1;
+      } else {
+        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+      }
+    }
+  }
+
+  const result: string[] = [];
+  let i = m;
+  let j = n;
+  while (i > 0 && j > 0) {
+    if (a[i - 1] === b[j - 1]) {
+      result.unshift(a[i - 1]);
+      i--;
+      j--;
+    } else if (dp[i - 1][j] > dp[i][j - 1]) {
+      i--;
+    } else {
+      j--;
+    }
+  }
+  return result;
 }
