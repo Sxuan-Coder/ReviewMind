@@ -134,6 +134,8 @@ export interface JobDetailResponse {
   findings?: Finding[];
   created_at: string;
   completed_at?: string;
+  updated_at?: string;
+  error_message?: string;
 }
 
 // ============ Job List ============
