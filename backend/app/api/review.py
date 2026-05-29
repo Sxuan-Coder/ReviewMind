@@ -5,20 +5,25 @@ from collections.abc import AsyncIterator
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
+from app.schemas.common import ApiResponse, success_response
 from app.schemas.review import CreateReviewJobRequest, CreateReviewJobResponse, ReviewJobSnapshot, ReviewReport
 from app.services.review_job_service import review_job_service
 
 router = APIRouter(prefix="/review", tags=["review"])
 
 
-@router.post("/jobs", response_model=CreateReviewJobResponse)
-async def create_review_job(request: CreateReviewJobRequest) -> CreateReviewJobResponse:
-    return review_job_service.create_job(request)
+@router.post("/jobs", response_model=ApiResponse[CreateReviewJobResponse])
+async def create_review_job(request: CreateReviewJobRequest) -> ApiResponse[CreateReviewJobResponse]:
+    return success_response(
+        review_job_service.create_job(request),
+        message="review job created",
+        code=20200,
+    )
 
 
-@router.get("/jobs/{job_id}", response_model=ReviewReport)
-async def get_review_report(job_id: str) -> ReviewReport:
-    return review_job_service.get_report(job_id)
+@router.get("/jobs/{job_id}", response_model=ApiResponse[ReviewReport])
+async def get_review_report(job_id: str) -> ApiResponse[ReviewReport]:
+    return success_response(review_job_service.get_report(job_id))
 
 
 @router.get("/jobs/{job_id}/state", response_model=ReviewJobSnapshot)

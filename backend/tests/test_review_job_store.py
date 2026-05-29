@@ -69,7 +69,7 @@ def test_review_job_state_endpoint_returns_created_job() -> None:
         "/api/v1/review/jobs",
         json={"pr_url": "https://github.com/example/repo/pull/1"},
     )
-    job_id = create_response.json()["job_id"]
+    job_id = create_response.json()["data"]["job_id"]
 
     state_response = client.get(f"/api/v1/review/jobs/{job_id}/state")
 
