@@ -7,5 +7,8 @@ def test_health_check() -> None:
     client = TestClient(app)
     response = client.get("/api/v1/health")
 
+    body = response.json()
     assert response.status_code == 200
-    assert response.json()["status"] == "ok"
+    assert body["code"] == 20000
+    assert body["message"] == "success"
+    assert body["data"]["status"] == "ok"
