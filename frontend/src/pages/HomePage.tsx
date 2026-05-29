@@ -1,7 +1,13 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Zap, Brain, FileText, GitPullRequest, Loader2, Search, ExternalLink, RefreshCw } from 'lucide-react';
 import { createReviewJob, getJobList, getPrPreview, parsePrUrl, getHealth } from '../services/reviewApi';
 import { useReviewStore } from '../store/reviewStore';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Badge } from '@/components/ui/badge';
 import type { PullRequestInfo, JobListItem } from '../types';
 
 export function HomePage() {
@@ -10,14 +16,11 @@ export function HomePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // ===== PR Preview =====
   const [preview, setPreview] = useState<PullRequestInfo | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
 
-  // ===== Health =====
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
 
-  // ===== History =====
   const [history, setHistory] = useState<JobListItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
 
@@ -25,7 +28,6 @@ export function HomePage() {
   const storeSetJob = useReviewStore((s) => s.setJob);
   const storeSetUseMock = useReviewStore((s) => s.setUseMock);
 
-  // Health check on mount
   useEffect(() => {
     getHealth()
       .then((res) => {
@@ -35,7 +37,6 @@ export function HomePage() {
       .catch(() => setBackendOnline(false));
   }, []);
 
-  // PR preview
   const handlePreview = useCallback(async () => {
     setError(null);
     setPreview(null);
@@ -49,9 +50,7 @@ export function HomePage() {
     }
     setPreviewLoading(true);
     try {
-      // Fast URL parse for validation
       await parsePrUrl(prUrl.trim(), useMock);
-      // Fetch full PR info
       const info = await getPrPreview(prUrl.trim(), useMock);
       setPreview(info);
     } catch (err) {
@@ -61,7 +60,6 @@ export function HomePage() {
     }
   }, [prUrl, useMock]);
 
-  // Start review
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
@@ -84,7 +82,6 @@ export function HomePage() {
     }
   }
 
-  // History
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true);
     try {
@@ -97,22 +94,26 @@ export function HomePage() {
     }
   }, [useMock]);
 
-  // Dismiss preview when URL changes
   useEffect(() => {
     setPreview(null);
   }, [prUrl]);
+
+  const features = [
+    { icon: Brain, title: '多 Agent 审查', desc: 'Summary、Security、Performance、Test 四大 Agent 协同分析' },
+    { icon: Search, title: 'AST 上下文增强', desc: '精确定位变更方法，不只是看 Diff 行' },
+    { icon: FileText, title: '结构化报告', desc: '风险等级、代码定位、修复建议、可复制 GitHub 评论' },
+  ];
 
   return (
     <main className="app-shell">
       <section className="hero-panel">
         <div className="relative z-10">
-          {/* Health indicator */}
           {backendOnline !== null && (
             <div className="flex items-center gap-2 mb-4">
               <span
-                className={`inline-block w-2 h-2 rounded-full ${backendOnline ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]' : 'bg-red-400'}`}
+                className={`inline-block w-2 h-2 rounded-full ${backendOnline ? 'bg-zinc-400 shadow-[0_0_6px_rgba(161,161,170,0.4)]' : 'bg-red-400'}`}
               />
-              <span className="text-xs text-gray-500">
+              <span className="text-xs text-muted-foreground">
                 {backendOnline ? '后端服务正常' : useMock ? 'Mock 模式（无需后端）' : '后端不可用'}
               </span>
             </div>
@@ -127,134 +128,142 @@ export function HomePage() {
           </p>
 
           <form className="review-form" onSubmit={handleSubmit}>
-            <input
+            <Input
               aria-label="GitHub PR URL"
               onChange={(e) => setPrUrl(e.target.value)}
               placeholder="https://github.com/owner/repo/pull/101"
               required
               type="url"
               value={prUrl}
+              className="flex-1 min-w-0 h-12 rounded-[10px] border-zinc-800/60 bg-zinc-950/70 text-foreground placeholder:text-muted-foreground/50 px-5 text-sm"
             />
-            <label className="flex items-center space-x-2 text-sm bg-white/[0.04] px-3 py-2 rounded-lg border border-gray-600/20 cursor-pointer">
-              <input
-                type="checkbox"
+            <label className="flex items-center space-x-2 text-sm bg-zinc-900/60 px-3 py-2 rounded-lg border border-zinc-800/60 cursor-pointer">
+              <Checkbox
                 checked={useMock}
-                onChange={(e) => setUseMock(e.target.checked)}
-                className="rounded accent-cyan-500"
+                onCheckedChange={(checked) => setUseMock(checked === true)}
+                className="border-zinc-600/40"
               />
-              <span className="text-gray-400 text-xs whitespace-nowrap">Mock 模式</span>
+              <span className="text-muted-foreground text-xs whitespace-nowrap">Mock 模式</span>
             </label>
-            <button disabled={loading || previewLoading} type="submit">
-              {loading ? '正在创建...' : previewLoading ? '获取中...' : preview ? '开始分析' : '预览 PR'}
-            </button>
+            <Button
+              disabled={loading || previewLoading}
+              type="submit"
+              className="h-12 rounded-[10px] px-6 bg-zinc-100 text-zinc-900 font-bold hover:bg-zinc-200 transition-colors border-0"
+            >
+              {loading ? (
+                <><Loader2 className="size-4 animate-spin" /> 正在创建...</>
+              ) : previewLoading ? (
+                <><Loader2 className="size-4 animate-spin" /> 获取中...</>
+              ) : preview ? (
+                <><Zap className="size-4" /> 开始分析</>
+              ) : (
+                <><GitPullRequest className="size-4" /> 预览 PR</>
+              )}
+            </Button>
           </form>
 
           {error && <div className="error-text">{error}</div>}
 
-          {/* PR Preview Card */}
-          {preview && (
-            <div
-              className="mt-6 rounded-2xl border border-cyan-500/20 bg-cyan-950/10 p-5 animate-slide-up"
-            >
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-xs text-gray-500 font-mono">
-                      {preview.owner}/{preview.repo}#{preview.number}
-                    </span>
-                    <span className="text-xs text-gray-600">by {preview.author}</span>
+          <AnimatePresence>
+            {preview && (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="mt-5 rounded-xl border border-zinc-800/60 bg-zinc-900/40 p-5"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-xs text-muted-foreground font-mono">
+                        {preview.owner}/{preview.repo}#{preview.number}
+                      </span>
+                      <span className="text-xs text-zinc-600">by {preview.author}</span>
+                    </div>
+                    <h3 className="text-base font-bold text-zinc-200 mb-2">{preview.title}</h3>
+                    <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                      <span>{preview.base_branch} ← {preview.head_branch}</span>
+                      <span className="text-emerald-500">+{preview.additions}</span>
+                      <span className="text-red-500">-{preview.deletions}</span>
+                      <span>{preview.changed_files} 个文件变更</span>
+                    </div>
                   </div>
-                  <h3 className="text-base font-bold text-gray-200 mb-2">{preview.title}</h3>
-                  <div className="flex items-center gap-4 text-xs text-gray-500">
-                    <span>
-                      {preview.base_branch} ← {preview.head_branch}
-                    </span>
-                    <span className="text-emerald-400/80">+{preview.additions}</span>
-                    <span className="text-red-400/80">-{preview.deletions}</span>
-                    <span>{preview.changed_files} 个文件变更</span>
-                  </div>
+                  <a href={preview.html_url} target="_blank" rel="noopener noreferrer" className="shrink-0">
+                    <Button variant="outline" size="sm" className="border-zinc-800/60 text-muted-foreground hover:text-zinc-200">
+                      <ExternalLink className="size-3" /> 查看 PR
+                    </Button>
+                  </a>
                 </div>
-                <a
-                  href={preview.html_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="shrink-0 rounded-lg border border-gray-600/30 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200 transition-colors"
-                >
-                  查看 PR →
-                </a>
-              </div>
-              <p className="text-xs text-gray-500 mt-3">
-                确认信息无误后，点击「开始分析」启动 AI Review
-              </p>
-            </div>
-          )}
+                <p className="text-xs text-zinc-500 mt-3">确认信息无误后，点击「开始分析」启动 AI Review</p>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       </section>
 
-      <div className="mt-10 grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Feature highlights */}
-        <section className="lg:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-5">
-          {[
-            { title: '多 Agent 审查', desc: 'Summary、Security、Performance、Test 四大 Agent 协同分析' },
-            { title: 'AST 上下文增强', desc: '精确定位变更方法，不只是看 Diff 行' },
-            { title: '结构化报告', desc: '风险等级、代码定位、修复建议、可复制 GitHub 评论' },
-          ].map((item) => (
+      <div className="mt-8 grid grid-cols-1 lg:grid-cols-3 gap-5">
+        <section className="lg:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-4">
+          {features.map((item) => (
             <div
               key={item.title}
-              className="rounded-2xl border border-gray-700/20 bg-white/[0.02] p-5 hover:bg-white/[0.04] transition-colors"
+              className="rounded-lg border border-zinc-800/60 bg-zinc-900/40 p-5 hover:bg-zinc-800/30 transition-colors"
             >
-              <h3 className="font-bold text-cyan-300/80 mb-2">{item.title}</h3>
-              <p className="text-sm text-gray-500 leading-relaxed">{item.desc}</p>
+              <item.icon className="size-5 text-zinc-400 mb-3" />
+              <h3 className="font-semibold text-zinc-200 mb-2 text-sm">{item.title}</h3>
+              <p className="text-xs text-zinc-500 leading-relaxed">{item.desc}</p>
             </div>
           ))}
         </section>
 
-        {/* Recent jobs */}
         <section className="lg:col-span-1">
-          <div className="rounded-2xl border border-gray-700/20 bg-white/[0.02] p-5">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="font-bold text-cyan-300/80 text-sm">历史记录</h3>
-              <button
+          <div className="rounded-lg border border-zinc-800/60 bg-zinc-900/40 overflow-hidden">
+            <div className="flex flex-row items-center justify-between px-5 pt-5 pb-3">
+              <span className="text-sm font-semibold text-zinc-200">历史记录</span>
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={loadHistory}
                 disabled={historyLoading}
-                className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
+                className="text-xs text-zinc-500 hover:text-zinc-200 h-7 px-2"
               >
+                {historyLoading ? <Loader2 className="size-3 animate-spin" /> : <RefreshCw className="size-3" />}
                 {historyLoading ? '加载中...' : '刷新'}
-              </button>
+              </Button>
             </div>
-            {history.length === 0 ? (
-              <p className="text-xs text-gray-600 py-4 text-center">
-                暂无记录，点击刷新加载
-              </p>
-            ) : (
-              <div className="space-y-2">
-                {history.map((item) => (
-                  <button
-                    key={item.job_id}
-                    onClick={() => navigate(`/report/${item.job_id}`)}
-                    className="w-full text-left rounded-lg border border-gray-700/20 bg-white/[0.01] px-3 py-2.5 hover:bg-white/[0.04] transition-colors"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs text-gray-300 truncate flex-1">{item.pr_title}</span>
-                      <span
-                        className={`shrink-0 rounded-full px-2 py-0.5 text-xs ${
-                          item.status === 'completed'
-                            ? 'bg-emerald-950/40 text-emerald-400'
-                            : 'bg-yellow-950/40 text-yellow-400'
-                        }`}
-                      >
-                        {item.status === 'completed' ? '完成' : item.status}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-3 mt-1 text-xs text-gray-600">
-                      <span>{item.risk_level}</span>
-                      <span>{item.finding_count} 个风险</span>
-                      <span>{new Date(item.created_at).toLocaleDateString('zh-CN')}</span>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
+            <div className="px-5 pb-5">
+              {history.length === 0 ? (
+                <p className="text-xs text-zinc-600 py-4 text-center">暂无记录，点击刷新加载</p>
+              ) : (
+                <div className="space-y-2">
+                  {history.map((item) => (
+                    <button
+                      key={item.job_id}
+                      onClick={() => navigate(`/report/${item.job_id}`)}
+                      className="w-full text-left rounded-lg border border-zinc-800/40 bg-zinc-950/40 px-3 py-2.5 hover:bg-zinc-800/30 transition-colors"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs text-zinc-300 truncate flex-1">{item.pr_title}</span>
+                        <Badge
+                          variant="outline"
+                          className={`shrink-0 text-xs ${
+                            item.status === 'completed'
+                              ? 'bg-emerald-950/30 text-emerald-400 border-emerald-500/20'
+                              : 'bg-yellow-950/30 text-yellow-400 border-yellow-500/20'
+                          }`}
+                        >
+                          {item.status === 'completed' ? '完成' : item.status}
+                        </Badge>
+                      </div>
+                      <div className="flex items-center gap-3 mt-1 text-xs text-zinc-600">
+                        <span>{item.risk_level}</span>
+                        <span>{item.finding_count} 个风险</span>
+                        <span>{new Date(item.created_at).toLocaleDateString('zh-CN')}</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </section>
       </div>

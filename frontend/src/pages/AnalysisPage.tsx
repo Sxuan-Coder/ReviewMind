@@ -1,11 +1,16 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Loader2, Clock, AlertTriangle, Wifi, XCircle, CheckCircle2, Ban, ArrowLeft } from 'lucide-react';
 import { useReviewStream } from '../hooks/useReviewStream';
 import { useReviewStore } from '../store/reviewStore';
 import { getJobDetail, cancelJob as cancelJobApi } from '../services/reviewApi';
 import { ProgressTimeline } from '../components/ProgressTimeline';
 import { FindingCard } from '../components/FindingCard';
 import { NavHeader } from '../components/NavHeader';
+import { Card, CardContent } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import type { PullRequestInfo } from '../types';
 
 export function AnalysisPage() {
@@ -19,7 +24,6 @@ export function AnalysisPage() {
   const [cancelling, setCancelling] = useState(false);
   const [prInfo, setPrInfo] = useState<PullRequestInfo | null>(null);
 
-  // Fetch PR info on mount
   useEffect(() => {
     if (!jobId) return;
     getJobDetail(jobId, useMock)
@@ -29,7 +33,6 @@ export function AnalysisPage() {
       .catch(() => {});
   }, [jobId, useMock]);
 
-  // Elapsed timer
   useEffect(() => {
     if (!store.startedAt) return;
     const timer = setInterval(() => {
@@ -38,7 +41,6 @@ export function AnalysisPage() {
     return () => clearInterval(timer);
   }, [store.startedAt]);
 
-  // Navigate to report when done
   useEffect(() => {
     if (store.jobStatus === 'completed' && jobId) {
       const fetchAndGo = async () => {
@@ -55,7 +57,6 @@ export function AnalysisPage() {
     }
   }, [store.jobStatus, jobId, navigate, useMock]);
 
-  // Cancel
   const handleCancel = useCallback(async () => {
     if (!jobId || cancelling) return;
     setCancelling(true);
@@ -87,164 +88,182 @@ export function AnalysisPage() {
     <div className="app-shell">
       <NavHeader title={`Job: ${jobId}`} />
 
-      {/* PR Info Header */}
       {prInfo && (
-        <div className="report-card mb-6 flex flex-wrap items-center justify-between gap-4">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-xs text-gray-500 font-mono">
-                {prInfo.owner}/{prInfo.repo}#{prInfo.number}
-              </span>
-              <span className="text-xs text-gray-600">by {prInfo.author}</span>
+        <Card className="report-card mb-5 py-0 gap-0">
+          <CardContent className="p-5 flex flex-wrap items-center justify-between gap-4">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-xs text-muted-foreground font-mono">
+                  {prInfo.owner}/{prInfo.repo}#{prInfo.number}
+                </span>
+                <span className="text-xs text-zinc-600">by {prInfo.author}</span>
+              </div>
+              <h2 className="text-lg font-bold text-zinc-200 truncate">{prInfo.title}</h2>
+              <div className="flex items-center gap-4 mt-1.5 text-xs text-muted-foreground">
+                <span>{prInfo.base_branch} ← {prInfo.head_branch}</span>
+                <span className="text-emerald-500">+{prInfo.additions}</span>
+                <span className="text-red-500">-{prInfo.deletions}</span>
+                <span>{prInfo.changed_files} 个文件</span>
+              </div>
             </div>
-            <h2 className="text-lg font-bold text-gray-200 truncate">{prInfo.title}</h2>
-            <div className="flex items-center gap-4 mt-1.5 text-xs text-gray-500">
-              <span>
-                {prInfo.base_branch} ← {prInfo.head_branch}
-              </span>
-              <span className="text-emerald-400/80">+{prInfo.additions}</span>
-              <span className="text-red-400/80">-{prInfo.deletions}</span>
-              <span>{prInfo.changed_files} 个文件</span>
-            </div>
-          </div>
-          <a
-            href={prInfo.html_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="shrink-0 rounded-lg border border-gray-600/30 px-4 py-2 text-xs text-gray-400 hover:text-gray-200 transition-colors"
-          >
-            查看 PR →
-          </a>
-        </div>
+            <a href={prInfo.html_url} target="_blank" rel="noopener noreferrer">
+              <Button variant="outline" size="sm" className="border-zinc-800/60 text-muted-foreground hover:text-zinc-200">
+                查看 PR →
+              </Button>
+            </a>
+          </CardContent>
+        </Card>
       )}
 
       <div className="dashboard-grid">
-        {/* Left column: Timeline */}
         <div className="md:col-span-1">
           <ProgressTimeline progress={store.progress} stepHistory={store.stepHistory} />
 
-          {/* Status card */}
-          <div className="timeline-card mt-5">
-            <div className="section-label">分析状态</div>
-            <div className="mt-3 space-y-2">
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-500">已耗时</span>
-                <span className="font-mono text-cyan-400">{elapsed}s</span>
+          <Card className="timeline-card mt-4 py-0 gap-0">
+            <CardContent className="p-6">
+              <div className="section-label">分析状态</div>
+              <div className="mt-3 space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span className="text-zinc-500 flex items-center gap-1.5"><Clock className="size-3" /> 已耗时</span>
+                  <span className="font-mono text-zinc-300">{elapsed}s</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-zinc-500 flex items-center gap-1.5"><AlertTriangle className="size-3" /> 已发现风险</span>
+                  <span className="font-mono text-orange-400">{store.findings.length}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-zinc-500 flex items-center gap-1.5"><Wifi className="size-3" /> 连接状态</span>
+                  <Badge
+                    variant="outline"
+                    className={`font-mono text-xs ${
+                      store.sseStatus === 'connected'
+                        ? 'text-emerald-400 border-emerald-500/20 bg-emerald-950/20'
+                        : 'text-zinc-500'
+                    }`}
+                  >
+                    {store.sseStatus}
+                  </Badge>
+                </div>
               </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-500">已发现风险</span>
-                <span className="font-mono text-orange-400">{store.findings.length}</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-500">连接状态</span>
-                <span
-                  className={`font-mono ${store.sseStatus === 'connected' ? 'text-emerald-400' : 'text-gray-500'}`}
-                >
-                  {store.sseStatus}
-                </span>
-              </div>
-            </div>
 
-            {/* Cancel button */}
-            {isActive && (
-              <button
-                onClick={handleCancel}
-                disabled={cancelling}
-                className="mt-4 w-full rounded-lg border border-red-500/25 bg-red-950/20 px-3 py-2 text-xs text-red-400 hover:bg-red-950/40 transition-colors disabled:opacity-50"
-              >
-                {cancelling ? '取消中...' : '取消分析'}
-              </button>
-            )}
-          </div>
+              {isActive && (
+                <Button
+                  variant="outline"
+                  onClick={handleCancel}
+                  disabled={cancelling}
+                  className="mt-4 w-full border-red-500/20 bg-red-950/20 text-red-400 hover:bg-red-950/40 hover:text-red-300"
+                >
+                  {cancelling ? <Loader2 className="size-3 animate-spin" /> : <XCircle className="size-3" />}
+                  {cancelling ? '取消中...' : '取消分析'}
+                </Button>
+              )}
+            </CardContent>
+          </Card>
         </div>
 
-        {/* Right column: Live content */}
         <div className="md:col-span-3 report-card space-y-5">
           <div className="section-label">实时分析</div>
 
-          {/* Streaming summary */}
-          {summaryText && (
-            <div className="rounded-xl border border-cyan-500/15 bg-cyan-950/10 p-5">
-              <h3 className="text-sm font-bold text-cyan-400 mb-2">PR 摘要</h3>
-              <p className="text-sm text-gray-300 leading-relaxed">
-                {summaryText}
-                {store.progress && store.progress.step === 'SUMMARY_AGENT' && (
-                  <span className="inline-block w-1.5 h-4 bg-cyan-400 ml-0.5 animate-pulse align-middle" />
-                )}
-              </p>
-            </div>
-          )}
+          <AnimatePresence>
+            {summaryText && (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 p-5"
+              >
+                <h3 className="text-sm font-semibold text-zinc-200 mb-2">PR 摘要</h3>
+                <p className="text-sm text-zinc-400 leading-relaxed">
+                  {summaryText}
+                  {store.progress && store.progress.step === 'SUMMARY_AGENT' && (
+                    <span className="inline-block w-1.5 h-4 bg-zinc-400 ml-0.5 animate-pulse align-middle" />
+                  )}
+                </p>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
-          {/* Live findings */}
           {store.findings.length > 0 && (
             <div>
-              <h3 className="text-sm font-bold text-orange-400 mb-3">
+              <h3 className="text-sm font-semibold text-orange-400 mb-3">
                 已发现风险 ({store.findings.length})
               </h3>
               <div className="space-y-3">
                 {store.findings.map((f) => (
-                  <FindingCard
+                  <motion.div
                     key={f.id}
-                    finding={f}
-                    expanded={expandedFindings.has(f.id)}
-                    onToggle={() => toggleFinding(f.id)}
-                  />
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.2 }}
+                  >
+                    <FindingCard
+                      finding={f}
+                      expanded={expandedFindings.has(f.id)}
+                      onToggle={() => toggleFinding(f.id)}
+                    />
+                  </motion.div>
                 ))}
               </div>
             </div>
           )}
 
-          {/* Loading placeholder */}
           {store.findings.length === 0 && !summaryText && isActive && (
-            <div className="flex flex-col items-center justify-center p-12 text-gray-500">
-              <div className="w-12 h-12 border-4 border-cyan-500/20 border-t-cyan-400 rounded-full animate-spin mb-4" />
+            <div className="flex flex-col items-center justify-center p-12 text-zinc-500">
+              <Loader2 className="size-10 text-zinc-600 animate-spin mb-4" />
               <p>AI 正在分析 PR 变更内容...</p>
-              <p className="text-xs mt-2 text-gray-600">这可能需要几十秒，请耐心等待</p>
+              <p className="text-xs mt-2 text-zinc-700">这可能需要几十秒，请耐心等待</p>
             </div>
           )}
 
-          {/* Done state */}
-          {isDone && (
-            <div className="rounded-xl border border-emerald-500/20 bg-emerald-950/10 p-5 text-center">
-              <p className="text-emerald-400 font-bold">分析完成</p>
-              <p className="text-sm text-gray-400 mt-1">
-                共发现 {store.findings.length} 个风险，正在跳转到报告页...
-              </p>
-            </div>
-          )}
+          <AnimatePresence>
+            {isDone && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="rounded-xl border border-emerald-500/20 bg-emerald-950/10 p-5 text-center"
+              >
+                <CheckCircle2 className="size-8 text-emerald-400 mx-auto mb-2" />
+                <p className="text-emerald-400 font-bold">分析完成</p>
+                <p className="text-sm text-zinc-500 mt-1">
+                  共发现 {store.findings.length} 个风险，正在跳转到报告页...
+                </p>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
-          {/* Cancelled state */}
           {isCancelled && (
             <div className="rounded-xl border border-yellow-500/20 bg-yellow-950/10 p-5 text-center">
+              <Ban className="size-8 text-yellow-400 mx-auto mb-2" />
               <p className="text-yellow-400 font-bold">分析已取消</p>
-              <button
+              <Button
+                variant="outline"
                 onClick={() => navigate('/')}
-                className="mt-3 rounded-lg border border-cyan-500/25 bg-cyan-950/30 px-4 py-2 text-sm text-cyan-400 hover:bg-cyan-950/50 transition-colors"
+                className="mt-3 border-zinc-800/60 bg-zinc-900/40 text-zinc-400 hover:text-zinc-200"
               >
-                返回首页
-              </button>
+                <ArrowLeft className="size-3" /> 返回首页
+              </Button>
             </div>
           )}
 
-          {/* Failed state */}
           {isFailed && (
             <div className="rounded-xl border border-red-500/20 bg-red-950/10 p-5 text-center">
+              <XCircle className="size-8 text-red-400 mx-auto mb-2" />
               <p className="text-red-400 font-bold">分析失败</p>
-              <p className="text-sm text-gray-400 mt-1">任务执行异常，请返回首页重试</p>
-              <button
+              <p className="text-sm text-zinc-500 mt-1">任务执行异常，请返回首页重试</p>
+              <Button
+                variant="outline"
                 onClick={() => navigate('/')}
-                className="mt-3 rounded-lg border border-cyan-500/25 bg-cyan-950/30 px-4 py-2 text-sm text-cyan-400 hover:bg-cyan-950/50 transition-colors"
+                className="mt-3 border-zinc-800/60 bg-zinc-900/40 text-zinc-400 hover:text-zinc-200"
               >
-                返回首页
-              </button>
+                <ArrowLeft className="size-3" /> 返回首页
+              </Button>
             </div>
           )}
 
-          {/* Error state */}
           {store.sseStatus === 'error' && (
             <div className="rounded-xl border border-red-500/20 bg-red-950/10 p-5 text-center">
+              <XCircle className="size-8 text-red-400 mx-auto mb-2" />
               <p className="text-red-400 font-bold">连接异常</p>
-              <p className="text-sm text-gray-400 mt-1">SSE 连接中断，请刷新页面重试</p>
+              <p className="text-sm text-zinc-500 mt-1">SSE 连接中断，请刷新页面重试</p>
             </div>
           )}
         </div>
