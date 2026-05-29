@@ -222,7 +222,7 @@ feat(auth): 实现手机号验证码登录
 
 例如：
 
-````md
+```md
 ## 功能描述
 
 本 PR 新增 commit history analyzer，用于读取仓库提交记录，分析 commit 时间分布、提交信息规范性以及是否存在集中提交风险。
@@ -232,7 +232,7 @@ feat(auth): 实现手机号验证码登录
 ```bash
 npm run analyze:commits
 ```
-````
+```
 
 ### 6.3 实现思路要求
 
@@ -256,7 +256,7 @@ npm run analyze:commits
 
 例如：
 
-````md
+```md
 ## 测试方式
 
 1. 执行：
@@ -268,7 +268,7 @@ npm run analyze:commits
 
 2. 使用包含正常 commit 和异常 commit 的测试仓库进行验证。
 3. 确认输出报告中能正确识别集中提交和空泛 commit message。
-````
+```
 
 ### 6.5 PR 合并后要求
 
@@ -419,7 +419,7 @@ git filter-repo
 ```md
 ## 依赖
 
-| Name       | Purpose            | Version | Original Work Boundary                         |
+| 名称       | Purpose            | Version | Original Work Boundary                         |
 | ---------- | ------------------ | ------- | ---------------------------------------------- |
 | React      | Frontend framework | x.x.x   | UI and business logic are original             |
 | Express    | Backend server     | x.x.x   | API design and review logic are original       |
@@ -611,7 +611,7 @@ Agent 生成测试时，必须保证测试真实可运行。
 
 禁止提交：
 
-- API Key
+- API 密钥
 - Token
 - Cookie
 - 私钥
