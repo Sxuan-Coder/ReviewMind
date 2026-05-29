@@ -1,4 +1,3 @@
-import asyncio
 import json
 from collections.abc import AsyncIterator
 
@@ -6,6 +5,7 @@ from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
 from app.schemas.common import ApiResponse, success_response
+from app.schemas.events import ReviewEventType, ReviewStreamEvent
 from app.schemas.review import CreateReviewJobRequest, CreateReviewJobResponse, ReviewJobSnapshot, ReviewReport
 from app.services.review_job_service import review_job_service
 
@@ -33,18 +33,48 @@ async def get_review_job_state(job_id: str) -> ReviewJobSnapshot:
 
 @router.get("/stream/{job_id}")
 async def stream_review_progress(job_id: str) -> StreamingResponse:
+    job = review_job_service.get_job(job_id)
+
     async def event_stream() -> AsyncIterator[str]:
-        steps = [
-            ("FETCH_PR", 10, "等待接入 GitHub PR 拉取模块"),
-            ("DIFF_FILTER", 25, "等待接入 DiffFilter 降噪模块"),
-            ("AST_CONTEXT", 45, "等待接入 AST 方法级上下文模块"),
-            ("AGENT_REVIEW", 70, "等待接入 LangGraph 多 Agent 工作流"),
-            ("REPORT", 100, "骨架占位分析完成"),
-        ]
-        for step, percent, message in steps:
-            payload = {"job_id": job_id, "step": step, "percent": percent, "message": message}
-            yield f"event: progress\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
-            await asyncio.sleep(0.2)
-        yield f"event: done\ndata: {json.dumps({'job_id': job_id, 'status': 'completed'})}\n\n"
+        for event in job.progress_events:
+            stream_event = _to_stream_event(job_id, event)
+            yield _format_sse(stream_event.type, stream_event.model_dump(mode="json"))
+
+        if job.status == "failed":
+            warning = ReviewStreamEvent(
+                type=ReviewEventType.warning,
+                job_id=job_id,
+                step="JOB_FAILED",
+                percent=100,
+                message=job.error_message or "Review Job 执行失败",
+            )
+            yield _format_sse(ReviewEventType.warning, warning.model_dump(mode="json"))
+
+        if job.status in {"completed", "failed"}:
+            done = ReviewStreamEvent(
+                type=ReviewEventType.done,
+                job_id=job_id,
+                step="JOB_DONE",
+                percent=100,
+                message="Review Job 已结束",
+                payload={"status": job.status},
+            )
+            yield _format_sse(ReviewEventType.done, done.model_dump(mode="json"))
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+def _to_stream_event(job_id: str, event: dict[str, object]) -> ReviewStreamEvent:
+    event_type = ReviewEventType(str(event.get("type", ReviewEventType.progress)))
+    return ReviewStreamEvent(
+        type=event_type,
+        job_id=job_id,
+        step=str(event.get("step", "UNKNOWN")),
+        percent=int(event.get("percent", 0)),
+        message=str(event.get("message", "")),
+        payload={key: value for key, value in event.items() if key not in {"type", "step", "percent", "message"}},
+    )
+
+
+def _format_sse(event_type: ReviewEventType, payload: dict[str, object]) -> str:
+    return f"event: {event_type.value}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
