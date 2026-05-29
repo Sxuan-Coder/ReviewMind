@@ -1,22 +1,33 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useReviewStream } from '../hooks/useReviewStream';
 import { useReviewStore } from '../store/reviewStore';
-import { getJobDetail } from '../services/reviewApi';
+import { getJobDetail, cancelJob as cancelJobApi } from '../services/reviewApi';
 import { ProgressTimeline } from '../components/ProgressTimeline';
 import { FindingCard } from '../components/FindingCard';
 import { NavHeader } from '../components/NavHeader';
+import type { PullRequestInfo } from '../types';
 
 export function AnalysisPage() {
   const { jobId } = useParams<{ jobId: string }>();
   const navigate = useNavigate();
   const useMock = useReviewStore((s) => s.useMock);
-
-  // Subscribe to SSE stream
   const store = useReviewStream(jobId, useMock);
 
   const [expandedFindings, setExpandedFindings] = useState<Set<string>>(new Set());
   const [elapsed, setElapsed] = useState(0);
+  const [cancelling, setCancelling] = useState(false);
+  const [prInfo, setPrInfo] = useState<PullRequestInfo | null>(null);
+
+  // Fetch PR info on mount
+  useEffect(() => {
+    if (!jobId) return;
+    getJobDetail(jobId, useMock)
+      .then((d) => {
+        if (d.pr) setPrInfo(d.pr);
+      })
+      .catch(() => {});
+  }, [jobId, useMock]);
 
   // Elapsed timer
   useEffect(() => {
@@ -39,11 +50,23 @@ export function AnalysisPage() {
         }
         navigate(`/report/${jobId}`);
       };
-      // Small delay so user sees the final state
       const t = setTimeout(fetchAndGo, 800);
       return () => clearTimeout(t);
     }
   }, [store.jobStatus, jobId, navigate, useMock]);
+
+  // Cancel
+  const handleCancel = useCallback(async () => {
+    if (!jobId || cancelling) return;
+    setCancelling(true);
+    try {
+      await cancelJobApi(jobId, useMock);
+      store.setJobStatus('cancelled');
+      store.setSSEStatus('disconnected');
+    } catch {
+      setCancelling(false);
+    }
+  }, [jobId, useMock, cancelling]);
 
   function toggleFinding(id: string) {
     setExpandedFindings((prev) => {
@@ -55,17 +78,52 @@ export function AnalysisPage() {
   }
 
   const summaryText = store.summaryChunks.join('');
+  const isActive = store.jobStatus === 'running' || store.jobStatus === 'pending';
+  const isDone = store.jobStatus === 'completed';
+  const isCancelled = store.jobStatus === 'cancelled';
+  const isFailed = store.jobStatus === 'failed';
 
   return (
     <div className="app-shell">
       <NavHeader title={`Job: ${jobId}`} />
+
+      {/* PR Info Header */}
+      {prInfo && (
+        <div className="report-card mb-6 flex flex-wrap items-center justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-xs text-gray-500 font-mono">
+                {prInfo.owner}/{prInfo.repo}#{prInfo.number}
+              </span>
+              <span className="text-xs text-gray-600">by {prInfo.author}</span>
+            </div>
+            <h2 className="text-lg font-bold text-gray-200 truncate">{prInfo.title}</h2>
+            <div className="flex items-center gap-4 mt-1.5 text-xs text-gray-500">
+              <span>
+                {prInfo.base_branch} ← {prInfo.head_branch}
+              </span>
+              <span className="text-emerald-400/80">+{prInfo.additions}</span>
+              <span className="text-red-400/80">-{prInfo.deletions}</span>
+              <span>{prInfo.changed_files} 个文件</span>
+            </div>
+          </div>
+          <a
+            href={prInfo.html_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="shrink-0 rounded-lg border border-gray-600/30 px-4 py-2 text-xs text-gray-400 hover:text-gray-200 transition-colors"
+          >
+            查看 PR →
+          </a>
+        </div>
+      )}
 
       <div className="dashboard-grid">
         {/* Left column: Timeline */}
         <div className="md:col-span-1">
           <ProgressTimeline progress={store.progress} stepHistory={store.stepHistory} />
 
-          {/* Timing card */}
+          {/* Status card */}
           <div className="timeline-card mt-5">
             <div className="section-label">分析状态</div>
             <div className="mt-3 space-y-2">
@@ -86,6 +144,17 @@ export function AnalysisPage() {
                 </span>
               </div>
             </div>
+
+            {/* Cancel button */}
+            {isActive && (
+              <button
+                onClick={handleCancel}
+                disabled={cancelling}
+                className="mt-4 w-full rounded-lg border border-red-500/25 bg-red-950/20 px-3 py-2 text-xs text-red-400 hover:bg-red-950/40 transition-colors disabled:opacity-50"
+              >
+                {cancelling ? '取消中...' : '取消分析'}
+              </button>
+            )}
           </div>
         </div>
 
@@ -126,7 +195,7 @@ export function AnalysisPage() {
           )}
 
           {/* Loading placeholder */}
-          {store.findings.length === 0 && !summaryText && (
+          {store.findings.length === 0 && !summaryText && isActive && (
             <div className="flex flex-col items-center justify-center p-12 text-gray-500">
               <div className="w-12 h-12 border-4 border-cyan-500/20 border-t-cyan-400 rounded-full animate-spin mb-4" />
               <p>AI 正在分析 PR 变更内容...</p>
@@ -135,12 +204,39 @@ export function AnalysisPage() {
           )}
 
           {/* Done state */}
-          {store.jobStatus === 'completed' && (
+          {isDone && (
             <div className="rounded-xl border border-emerald-500/20 bg-emerald-950/10 p-5 text-center">
               <p className="text-emerald-400 font-bold">分析完成</p>
               <p className="text-sm text-gray-400 mt-1">
                 共发现 {store.findings.length} 个风险，正在跳转到报告页...
               </p>
+            </div>
+          )}
+
+          {/* Cancelled state */}
+          {isCancelled && (
+            <div className="rounded-xl border border-yellow-500/20 bg-yellow-950/10 p-5 text-center">
+              <p className="text-yellow-400 font-bold">分析已取消</p>
+              <button
+                onClick={() => navigate('/')}
+                className="mt-3 rounded-lg border border-cyan-500/25 bg-cyan-950/30 px-4 py-2 text-sm text-cyan-400 hover:bg-cyan-950/50 transition-colors"
+              >
+                返回首页
+              </button>
+            </div>
+          )}
+
+          {/* Failed state */}
+          {isFailed && (
+            <div className="rounded-xl border border-red-500/20 bg-red-950/10 p-5 text-center">
+              <p className="text-red-400 font-bold">分析失败</p>
+              <p className="text-sm text-gray-400 mt-1">任务执行异常，请返回首页重试</p>
+              <button
+                onClick={() => navigate('/')}
+                className="mt-3 rounded-lg border border-cyan-500/25 bg-cyan-950/30 px-4 py-2 text-sm text-cyan-400 hover:bg-cyan-950/50 transition-colors"
+              >
+                返回首页
+              </button>
             </div>
           )}
 
