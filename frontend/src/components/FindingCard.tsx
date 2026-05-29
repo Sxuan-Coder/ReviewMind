@@ -6,6 +6,7 @@ interface FindingCardProps {
   finding: Finding;
   expanded?: boolean;
   onToggle?: () => void;
+  onJumpToDiff?: () => void;
 }
 
 const levelBorderColors: Record<string, string> = {
@@ -16,7 +17,7 @@ const levelBorderColors: Record<string, string> = {
   SUGGESTION: 'border-gray-500/25',
 };
 
-export function FindingCard({ finding, expanded = false, onToggle }: FindingCardProps) {
+export function FindingCard({ finding, expanded = false, onToggle, onJumpToDiff }: FindingCardProps) {
   return (
     <div
       className={cn(
@@ -47,6 +48,14 @@ export function FindingCard({ finding, expanded = false, onToggle }: FindingCard
         <span className="text-cyan-500/60">L{finding.line}</span>
         {finding.symbol && (
           <span className="text-purple-400/70 truncate">→ {finding.symbol}</span>
+        )}
+        {onJumpToDiff && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onJumpToDiff(); }}
+            className="ml-auto shrink-0 text-xs text-cyan-500/60 hover:text-cyan-400 border border-cyan-500/20 rounded px-2 py-0.5 transition-colors"
+          >
+            定位 Diff
+          </button>
         )}
       </div>
 
