@@ -311,7 +311,49 @@ feature/* → dev → main
 
 ## 7. PR 描述模板
 
-所有 PR 必须使用.github目录下的PR模板。
+### 7.1 所有 PR 必须使用 `.github/pull_request_template.md` 模板
+
+每次创建 PR 前，Agent **必须**执行以下步骤：
+
+1. **读取模板**：`Read .github/pull_request_template.md`
+2. **逐节填充**：按模板的「标题」「功能描述」「实现思路」「测试方式」逐节填写
+3. **检查完整性**：确认所有 section 均已填写，不可留空或跳过
+
+### 7.2 禁止跳过模板
+
+以下行为**严格禁止**：
+
+- 使用空 PR 描述或仅一行标题
+- 用 `gh pr create` 时不传 `--body-file` 或 `--body`
+- 在 GitHub UI 创建 PR 时跳过模板中的任意 section
+- 用 `fix: xxx` 等简短描述替代完整模板内容
+
+### 7.3 模板填写示例
+
+```markdown
+## 标题
+feat(backend): 实现 Diff Parser 模块
+
+## 功能描述
+本 PR 新增 Diff Parser，用于解析 Git diff 输出为结构化数据，支持按文件和行级粒度提取变更信息。
+
+## 实现思路
+基于 Python 实现 diff 解析，通过逐行解析 unified diff 格式，提取文件路径、变更类型（新增/修改/删除）、行号范围和内容差异。
+
+## 测试方式
+1. 运行 `pytest backend/tests/test_diff_parser.py -v`
+2. 使用包含多文件变更的 diff 数据验证解析结果
+3. 验证空 diff 和异常输入的容错处理
+```
+
+### 7.4 Agent 职责
+
+Agent 在创建 PR 时，**必须**：
+
+- 读取 `.github/pull_request_template.md`
+- 基于模板结构生成 PR body
+- 将填充后的内容传给 `gh pr create --body` 或 `--body-file`
+- 不得使用 Agent 默认的简短 PR 描述
 
 ---
 
