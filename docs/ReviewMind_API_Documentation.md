@@ -305,10 +305,27 @@ GET /api/v1/review/jobs/{job_id}
       "review_comment": "## AI Review Summary\n\n本次 PR 整体风险等级：MEDIUM..."
     },
     "created_at": "2026-05-29T10:00:00+08:00",
-    "completed_at": "2026-05-29T10:01:32+08:00"
+    "completed_at": "2026-05-29T10:01:32+08:00",
+    "updated_at": "2026-05-29T10:01:32+08:00",
+    "error_message": null
   }
 }
 ```
+
+#### 响应字段说明
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| job_id | string | 任务 ID |
+| status | string | 任务状态 |
+| pr | PullRequestInfo \| null | PR 基本信息（运行中可能为 null） |
+| progress | ReviewProgress \| null | 当前进度 |
+| findings | Finding[] | 已发现的风险列表 |
+| report | ReviewReport \| null | 完整报告（任务完成后非 null） |
+| created_at | string | 创建时间 |
+| completed_at | string \| null | 完成时间 |
+| updated_at | string \| null | 最后更新时间 |
+| error_message | string \| null | 错误信息（失败时有值） |
 
 ---
 

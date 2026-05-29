@@ -45,7 +45,8 @@ export function useReviewStream(jobId: string | undefined, useMock: boolean) {
     }
 
     // Real SSE connection
-    const streamUrl = `/api/v1/review/stream/${jobId}`;
+    const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api/v1';
+    const streamUrl = `${apiBaseUrl}/review/stream/${jobId}`;
     const eventSource = new EventSource(streamUrl);
 
     eventSource.addEventListener('progress', (e: MessageEvent) => {

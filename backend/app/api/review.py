@@ -5,11 +5,11 @@ from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
 from app.schemas.common import ApiResponse, success_response
-from app.schemas.events import ReviewEventType, ReviewStreamEvent
 from app.schemas.github import GitHubPullRequestRef
 from app.schemas.review import (
     CreateReviewJobRequest,
     CreateReviewJobResponse,
+    JobListResponse,
     ReviewJobDetailResponse,
     ReviewJobSnapshot,
 )
@@ -32,6 +32,11 @@ async def create_review_job(request: CreateReviewJobRequest) -> ApiResponse[Crea
         message="review job created",
         code=20200,
     )
+
+
+@review_router.get("/jobs", response_model=ApiResponse[JobListResponse])
+async def list_review_jobs(page: int = 1, page_size: int = 10) -> ApiResponse[JobListResponse]:
+    return success_response(review_job_service.get_job_list(page, page_size))
 
 
 @review_router.get("/jobs/{job_id}", response_model=ApiResponse[ReviewJobDetailResponse])
@@ -58,47 +63,58 @@ async def stream_review_progress(job_id: str) -> StreamingResponse:
 
     async def event_stream() -> AsyncIterator[str]:
         for event in job.progress_events:
-            stream_event = _to_stream_event(job_id, event)
-            yield _format_sse(stream_event.type, stream_event.model_dump(mode="json"))
+            event_type = str(event.get("type", "progress"))
+            data = _format_event_data(event_type, event)
+            yield _format_sse(event_type, data)
 
         if job.status == "failed":
-            warning = ReviewStreamEvent(
-                type=ReviewEventType.warning,
-                job_id=job_id,
-                step="JOB_FAILED",
-                percent=100,
-                message=job.error_message or "Review Job 执行失败",
-            )
-            yield _format_sse(ReviewEventType.warning, warning.model_dump(mode="json"))
+            warning_data = {
+                "code": "JOB_FAILED",
+                "message": job.error_message or "Review Job 执行失败",
+            }
+            yield _format_sse("warning", warning_data)
 
         if job.status in {"completed", "failed"}:
-            done = ReviewStreamEvent(
-                type=ReviewEventType.done,
-                job_id=job_id,
-                step="JOB_DONE",
-                percent=100,
-                message="Review Job 已结束",
-                payload={"status": job.status},
-            )
-            yield _format_sse(ReviewEventType.done, done.model_dump(mode="json"))
+            done_data = {
+                "job_id": job_id,
+                "status": job.status,
+                "report_url": f"/api/v1/review/jobs/{job_id}",
+                "total_findings": _count_findings(job),
+                "duration_ms": _calc_duration_ms(job),
+            }
+            yield _format_sse("done", done_data)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
-def _to_stream_event(job_id: str, event: dict[str, object]) -> ReviewStreamEvent:
-    event_type = ReviewEventType(str(event.get("type", ReviewEventType.progress)))
-    return ReviewStreamEvent(
-        type=event_type,
-        job_id=job_id,
-        step=str(event.get("step", "UNKNOWN")),
-        percent=int(event.get("percent", 0)),
-        message=str(event.get("message", "")),
-        payload={key: value for key, value in event.items() if key not in {"type", "step", "percent", "message"}},
-    )
+def _format_event_data(event_type: str, event: dict[str, object]) -> dict[str, object]:
+    if event_type == "progress":
+        return {"step": event.get("step", ""), "percent": event.get("percent", 0), "message": event.get("message", "")}
+    if event_type == "finding":
+        finding_keys = {"id", "agent", "file", "line", "symbol", "level", "type", "confidence", "description", "suggestion"}
+        return {k: v for k, v in event.items() if k in finding_keys}
+    if event_type == "chunk":
+        return {"target": event.get("target", "summary"), "content": event.get("content", "")}
+    if event_type == "warning":
+        return {"code": event.get("step", "WARNING"), "message": event.get("message", ""), "file": event.get("file")}
+    return event
 
 
-def _format_sse(event_type: ReviewEventType, payload: dict[str, object]) -> str:
-    return f"event: {event_type.value}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+def _count_findings(job: ReviewJobSnapshot) -> int:
+    if hasattr(job, "pipeline_result") and job.pipeline_result:
+        pass
+    return 0
+
+
+def _calc_duration_ms(job: ReviewJobSnapshot) -> int:
+    if job.created_at and hasattr(job, "updated_at") and job.updated_at:
+        delta = job.updated_at - job.created_at
+        return int(delta.total_seconds() * 1000)
+    return 0
+
+
+def _format_sse(event_type: str, payload: dict[str, object]) -> str:
+    return f"event: {event_type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
 # --- GitHub 辅助接口 ---
@@ -126,7 +142,20 @@ async def pr_preview(body: dict) -> ApiResponse[dict]:
         return success_response(None, message=str(exc), code=40001)
     pr_info = await github_client.fetch_pull_request(ref)
     files = await github_client.fetch_pull_request_files(ref)
+    pr_data = {
+        "owner": pr_info.owner,
+        "repo": pr_info.repo,
+        "number": pr_info.pull_number,
+        "title": pr_info.title,
+        "author": pr_info.author,
+        "base_branch": pr_info.base.ref,
+        "head_branch": pr_info.head.ref,
+        "changed_files": pr_info.changed_files,
+        "additions": pr_info.additions,
+        "deletions": pr_info.deletions,
+        "html_url": str(pr_info.html_url),
+    }
     return success_response({
-        "pr": pr_info.model_dump(mode="json"),
+        "pr": pr_data,
         "files": [f.model_dump(mode="json") for f in files],
     })

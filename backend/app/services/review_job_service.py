@@ -17,6 +17,8 @@ from app.schemas.review import (
     ChangedFile,
     CreateReviewJobRequest,
     CreateReviewJobResponse,
+    JobListItem,
+    JobListResponse,
     PrInfo,
     ReviewJobDetailResponse,
     ReviewJobSnapshot,
@@ -123,6 +125,18 @@ class ReviewJobService:
         self._store.update_status(job_id, ReviewJobStatus.cancelled)
         return self.get_job_detail(job_id)
 
+    def get_job_list(self, page: int = 1, page_size: int = 10) -> JobListResponse:
+        all_jobs = sorted(
+            self._store.get_all(),
+            key=lambda j: j.created_at,
+            reverse=True,
+        )
+        total = len(all_jobs)
+        offset = (page - 1) * page_size
+        page_jobs = all_jobs[offset:offset + page_size]
+        items = [_to_job_list_item(j) for j in page_jobs]
+        return JobListResponse(items=items, page=page, page_size=page_size, total=total)
+
     def _get_job_or_404(self, job_id: str) -> ReviewJob:
         try:
             return self._store.get(job_id)
@@ -142,6 +156,9 @@ def _build_pr_info(pr_info: dict[str, object]) -> PrInfo:
         author=str(pr_info.get("author", "")),
         base_branch=str(pr_info.get("base", {}).get("ref", "") if isinstance(pr_info.get("base"), dict) else ""),
         head_branch=str(pr_info.get("head", {}).get("ref", "") if isinstance(pr_info.get("head"), dict) else ""),
+        changed_files=int(pr_info.get("changed_files", 0)),
+        additions=int(pr_info.get("additions", 0)),
+        deletions=int(pr_info.get("deletions", 0)),
         html_url=str(pr_info.get("html_url", "")),
     )
 
@@ -193,3 +210,16 @@ def _build_report_from_pipeline(job: ReviewJob) -> ReviewReport:
 
 
 review_job_service = ReviewJobService(review_job_store)
+
+
+def _to_job_list_item(job: ReviewJob) -> JobListItem:
+    report = job.report
+    return JobListItem(
+        job_id=job.job_id,
+        status=job.status,
+        pr_title=str(job.pr_info.get("title", "")) if job.pr_info else "",
+        pr_url=job.pr_url,
+        risk_level=report.risk_level if report else "LOW",
+        finding_count=len(report.findings) if report else 0,
+        created_at=job.created_at,
+    )

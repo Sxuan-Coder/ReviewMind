@@ -73,6 +73,9 @@ class PrInfo(BaseModel):
     author: str
     base_branch: str
     head_branch: str
+    changed_files: int = 0
+    additions: int = 0
+    deletions: int = 0
     html_url: str
 
 
@@ -89,6 +92,8 @@ class ChangedFile(BaseModel):
     status: str
     additions: int = 0
     deletions: int = 0
+    changes: int = 0
+    patch: str | None = None
     risk_count: int = 0
 
 
@@ -123,3 +128,20 @@ class ReviewJobDetailResponse(BaseModel):
     completed_at: datetime | None = None
     updated_at: datetime | None = None
     error_message: str | None = None
+
+
+class JobListItem(BaseModel):
+    job_id: str
+    status: ReviewJobStatus
+    pr_title: str = ""
+    pr_url: str = ""
+    risk_level: str = "LOW"
+    finding_count: int = 0
+    created_at: datetime | None = None
+
+
+class JobListResponse(BaseModel):
+    items: list[JobListItem] = Field(default_factory=list)
+    page: int = 1
+    page_size: int = 10
+    total: int = 0
