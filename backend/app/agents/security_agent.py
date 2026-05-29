@@ -1,3 +1,5 @@
+from uuid import uuid4
+
 from app.schemas.agents import AgentContext, AgentFindingsResult
 from app.schemas.review import ReviewFinding
 
@@ -10,6 +12,7 @@ def run(context: AgentContext) -> AgentFindingsResult:
         if changed_lines:
             findings.append(
                 ReviewFinding(
+                    id=f"finding_{uuid4().hex[:8]}",
                     agent="security_agent",
                     file=file,
                     line=changed_lines[0],

@@ -18,7 +18,7 @@ def test_health_uses_unified_response() -> None:
     assert response.json() == {
         "code": 20000,
         "message": "success",
-        "data": {"status": "ok", "service": "reviewmind-api"},
+        "data": {"status": "ok", "service": "reviewmind-api", "version": "1.0.0"},
     }
 
 

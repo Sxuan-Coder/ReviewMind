@@ -69,12 +69,12 @@ async def test_review_pipeline_saves_intermediate_result_and_completes_job() -> 
     assert result.parsed_diff[0]["changed_lines"] == [2, 3]
     assert saved_job.pipeline_result is not None
     assert [event["step"] for event in saved_job.progress_events] == [
-        "PARSE_PR_URL",
+        "FETCH_PR",
         "FETCH_PR",
         "FETCH_FILES",
         "DIFF_FILTER",
         "DIFF_PARSE",
-        "PIPELINE_DONE",
+        "DONE",
     ]
 
 
