@@ -9,6 +9,18 @@ class PullRequestFile(BaseModel):
     patch: str | None = None
 
 
+class ExcludedDiffFile(BaseModel):
+    file: PullRequestFile
+    exclude_reason: str
+
+
+class DiffFilterResult(BaseModel):
+    included_files: list[PullRequestFile] = Field(default_factory=list)
+    excluded_files: list[ExcludedDiffFile] = Field(default_factory=list)
+    total_additions: int = 0
+    total_deletions: int = 0
+
+
 class DiffLine(BaseModel):
     old_line_number: int | None = None
     new_line_number: int | None = None

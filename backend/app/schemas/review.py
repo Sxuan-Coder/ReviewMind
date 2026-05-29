@@ -1,4 +1,6 @@
+from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, Field, HttpUrl
 
@@ -36,6 +38,23 @@ class ReviewFinding(BaseModel):
     confidence: float
     description: str
     suggestion: str
+
+
+class ReviewProgressEvent(BaseModel):
+    step: str
+    percent: int = Field(ge=0, le=100)
+    message: str
+    type: str = "progress"
+
+
+class ReviewJobSnapshot(BaseModel):
+    job_id: str
+    pr_url: HttpUrl
+    status: ReviewJobStatus
+    created_at: datetime
+    updated_at: datetime
+    error_message: str | None = None
+    progress_events: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ReviewReport(BaseModel):
