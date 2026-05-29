@@ -6,7 +6,7 @@ from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
 from app.schemas.common import ApiResponse, success_response
-from app.schemas.review import CreateReviewJobRequest, CreateReviewJobResponse, ReviewReport
+from app.schemas.review import CreateReviewJobRequest, CreateReviewJobResponse, ReviewJobSnapshot, ReviewReport
 from app.services.review_job_service import review_job_service
 
 router = APIRouter(prefix="/review", tags=["review"])
@@ -24,6 +24,11 @@ async def create_review_job(request: CreateReviewJobRequest) -> ApiResponse[Crea
 @router.get("/jobs/{job_id}", response_model=ApiResponse[ReviewReport])
 async def get_review_report(job_id: str) -> ApiResponse[ReviewReport]:
     return success_response(review_job_service.get_report(job_id))
+
+
+@router.get("/jobs/{job_id}/state", response_model=ReviewJobSnapshot)
+async def get_review_job_state(job_id: str) -> ReviewJobSnapshot:
+    return review_job_service.get_job(job_id)
 
 
 @router.get("/stream/{job_id}")
