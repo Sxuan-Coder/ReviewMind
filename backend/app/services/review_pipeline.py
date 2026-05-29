@@ -4,7 +4,7 @@ from typing import Any
 from app.models.review_job import ReviewJob
 from app.schemas.diff import PullRequestFile
 from app.schemas.github import GitHubPullRequestFile
-from app.schemas.review import ReviewJobStatus, ReviewReport, ReviewReportStats
+from app.schemas.review import ReviewJobStatus, ReviewReport, ReviewReportStats, ChangedFile
 from app.services.diff_filter import filter_diff_files
 from app.services.diff_parser import parse_diff_file
 from app.services.github_client import GitHubClient
@@ -61,13 +61,14 @@ class ReviewPipeline:
                 filtered_files=filtered.model_dump(mode="json"),
                 parsed_diff=[item.model_dump(mode="json") for item in parsed_diff],
             )
+            self._store.save_pr_info(job.job_id, pr_info.model_dump(mode="json"))
             self._store.save_pipeline_result(job.job_id, result)
 
             report = ReviewReport(
                 summary=f"已完成 PR #{pr_info.pull_number} 的基础 Diff 分析，共保留 {len(filtered.included_files)} 个文件。",
                 risk_level="LOW",
                 stats=ReviewReportStats(),
-                changed_files=changed_files,
+                changed_files=[ChangedFile(**cf) for cf in changed_files],
                 changed_symbols=[],
                 findings=[],
                 review_comment="## AI Review Summary\n\n基础 Review Pipeline 已完成，后续 PR 将接入 Mock Agents 和风险聚合。",

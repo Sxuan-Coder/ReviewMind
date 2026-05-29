@@ -63,7 +63,7 @@ class ReviewJobSnapshot(BaseModel):
     pipeline_result: dict[str, Any] | None = None
 
 
-# --- 报告相关结构 ---
+# --- 报告相关结构（与 API 文档对齐） ---
 
 class PrInfo(BaseModel):
     owner: str
@@ -99,6 +99,7 @@ class ChangedSymbol(BaseModel):
     start_line: int
     end_line: int
     changed_lines: list[int] = Field(default_factory=list)
+    code: str | None = None
 
 
 class ReviewReport(BaseModel):
@@ -120,3 +121,5 @@ class ReviewJobDetailResponse(BaseModel):
     report: ReviewReport | None = None
     created_at: datetime | None = None
     completed_at: datetime | None = None
+    updated_at: datetime | None = None
+    error_message: str | None = None

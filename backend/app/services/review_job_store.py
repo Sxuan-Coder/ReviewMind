@@ -54,17 +54,12 @@ class ReviewJobStore:
             raise InvalidReviewJobTransitionError(job.status, status)
 
         job.status = status
-        job.error_message = error_message
+        if error_message is not None:
+            job.error_message = error_message
         if report is not None:
             job.report = report
         if status == ReviewJobStatus.completed:
             job.mark_completed()
-        job.mark_updated()
-        return job
-
-    def save_pr_info(self, job_id: str, pr_info: dict) -> ReviewJob:
-        job = self.get(job_id)
-        job.pr_info = pr_info
         job.mark_updated()
         return job
 
@@ -77,6 +72,12 @@ class ReviewJobStore:
     def get_progress_events(self, job_id: str) -> list[dict[str, object]]:
         job = self.get(job_id)
         return list(job.progress_events)
+
+    def save_pr_info(self, job_id: str, pr_info: dict[str, object]) -> ReviewJob:
+        job = self.get(job_id)
+        job.pr_info = pr_info
+        job.mark_updated()
+        return job
 
     def save_pipeline_result(self, job_id: str, result: object) -> ReviewJob:
         job = self.get(job_id)

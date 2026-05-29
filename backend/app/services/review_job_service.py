@@ -4,12 +4,15 @@ from fastapi import HTTPException, status
 
 from app.models.review_job import ReviewJob
 from app.schemas.review import (
+    ChangedFile,
     CreateReviewJobRequest,
     CreateReviewJobResponse,
+    PrInfo,
     ReviewJobDetailResponse,
     ReviewJobSnapshot,
     ReviewJobStatus,
     ReviewReport,
+    ReviewReportStats,
 )
 from app.services.review_job_store import ReviewJobNotFoundError, ReviewJobStore, review_job_store
 from app.services.review_pipeline import ReviewPipeline
@@ -29,55 +32,15 @@ class ReviewJobService:
             {"step": "JOB_CREATED", "percent": 0, "message": "Review Job 已创建"},
         )
         await self._pipeline.run(job)
+        current = self._store.get(job.job_id)
         return CreateReviewJobResponse(
-            job_id=job.job_id,
-            status=self._store.get(job.job_id).status,
-            stream_url=f"/api/v1/review/stream/{job.job_id}",
-            report_url=f"/api/v1/review/jobs/{job.job_id}",
-        )
-
-    def get_job_detail(self, job_id: str) -> ReviewJobDetailResponse:
-        """对齐文档 4.2：GET /review/jobs/{job_id} 的完整响应。"""
-        job = self._get_job_or_404(job_id)
-
-        # 构建 pr 信息
-        pr_info = None
-        if job.pr_info:
-            pr_info = {
-                "owner": job.pr_info.get("owner", ""),
-                "repo": job.pr_info.get("repo", ""),
-                "number": job.pr_info.get("pull_number", 0),
-                "title": job.pr_info.get("title", ""),
-                "author": job.pr_info.get("author", ""),
-                "base_branch": job.pr_info.get("base", {}).get("ref", "") if isinstance(job.pr_info.get("base"), dict) else "",
-                "head_branch": job.pr_info.get("head", {}).get("ref", "") if isinstance(job.pr_info.get("head"), dict) else "",
-                "html_url": job.pr_info.get("html_url", ""),
-            }
-
-        # 最新进度
-        progress = None
-        if job.progress_events:
-            last = job.progress_events[-1]
-            progress = {
-                "step": last.get("step", "UNKNOWN"),
-                "percent": last.get("percent", 0),
-                "message": last.get("message", ""),
-                "type": last.get("type", "progress"),
-            }
-
-        return ReviewJobDetailResponse(
-            job_id=job.job_id,
-            status=job.status,
-            pr=pr_info,
-            progress=progress,
-            findings=[f for f in (job.report.findings if job.report else [])],
-            report=job.report,
-            created_at=job.created_at,
-            completed_at=job.completed_at,
+            job_id=current.job_id,
+            status=current.status,
+            stream_url=f"/api/v1/review/stream/{current.job_id}",
+            report_url=f"/api/v1/review/jobs/{current.job_id}",
         )
 
     def get_report(self, job_id: str) -> ReviewReport:
-        """兼容旧接口调用，直接返回报告。"""
         job = self._get_job_or_404(job_id)
         if job.report is not None:
             return job.report
@@ -85,8 +48,36 @@ class ReviewJobService:
         return ReviewReport(
             summary="ReviewMind 已创建任务。真实 PR 拉取、Diff 解析和多 Agent 审查将在后续 PR 中接入。",
             risk_level="LOW",
+            stats=ReviewReportStats(),
+            changed_files=[],
+            changed_symbols=[],
             findings=[],
             review_comment="## AI Review Summary\n\n当前任务已进入内存状态仓库，暂无真实风险发现。",
+        )
+
+    def get_job_detail(self, job_id: str) -> ReviewJobDetailResponse:
+        job = self._get_job_or_404(job_id)
+        pr = _build_pr_info(job.pr_info) if job.pr_info else None
+        progress = _last_progress(job)
+        findings = _collect_findings(job)
+
+        report: ReviewReport | None = None
+        if job.report is not None:
+            report = job.report
+        elif job.status == ReviewJobStatus.completed and job.pipeline_result:
+            report = _build_report_from_pipeline(job)
+
+        return ReviewJobDetailResponse(
+            job_id=job.job_id,
+            status=job.status,
+            pr=pr,
+            progress=progress,
+            findings=findings,
+            report=report,
+            created_at=job.created_at,
+            completed_at=job.completed_at,
+            updated_at=job.updated_at,
+            error_message=job.error_message,
         )
 
     def get_job(self, job_id: str) -> ReviewJobSnapshot:
@@ -115,6 +106,65 @@ class ReviewJobService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Review job not found: {job_id}",
             ) from exc
+
+
+def _build_pr_info(pr_info: dict[str, object]) -> PrInfo:
+    return PrInfo(
+        owner=str(pr_info.get("owner", "")),
+        repo=str(pr_info.get("repo", "")),
+        number=int(pr_info.get("pull_number", 0)),
+        title=str(pr_info.get("title", "")),
+        author=str(pr_info.get("author", "")),
+        base_branch=str(pr_info.get("base", {}).get("ref", "") if isinstance(pr_info.get("base"), dict) else ""),
+        head_branch=str(pr_info.get("head", {}).get("ref", "") if isinstance(pr_info.get("head"), dict) else ""),
+        html_url=str(pr_info.get("html_url", "")),
+    )
+
+
+def _last_progress(job: ReviewJob) -> "ReviewProgressEvent | None":
+    from app.schemas.review import ReviewProgressEvent
+    if not job.progress_events:
+        return None
+    last = job.progress_events[-1]
+    return ReviewProgressEvent(
+        step=str(last.get("step", "UNKNOWN")),
+        percent=int(last.get("percent", 0)),
+        message=str(last.get("message", "")),
+        type=str(last.get("type", "progress")),
+    )
+
+
+def _collect_findings(job: ReviewJob) -> list["ReviewFinding"]:
+    from app.schemas.review import ReviewFinding
+    if job.report and job.report.findings:
+        return job.report.findings
+    return []
+
+
+def _build_report_from_pipeline(job: ReviewJob) -> ReviewReport:
+    pipe = job.pipeline_result or {}
+    filtered = pipe.get("filtered_files", {})
+    included = filtered.get("included_files", []) if isinstance(filtered, dict) else []
+    changed_files = [
+        ChangedFile(
+            filename=f.get("filename", ""),
+            status=f.get("status", ""),
+            additions=f.get("additions", 0),
+            deletions=f.get("deletions", 0),
+        )
+        for f in included
+        if isinstance(f, dict)
+    ]
+    total_additions = sum(cf.additions for cf in changed_files)
+    return ReviewReport(
+        summary=f"已完成基础 Diff 分析，共保留 {len(changed_files)} 个文件，+{total_additions} 行。",
+        risk_level="LOW",
+        stats=ReviewReportStats(),
+        changed_files=changed_files,
+        changed_symbols=[],
+        findings=[],
+        review_comment="## AI Review Summary\n\n基础 Review Pipeline 已完成。",
+    )
 
 
 review_job_service = ReviewJobService(review_job_store)

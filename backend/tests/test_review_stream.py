@@ -2,7 +2,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.models.review_job import ReviewJob
-from app.schemas.review import ReviewJobStatus, ReviewReport
+from app.schemas.review import ReviewJobStatus, ReviewReport, ReviewReportStats
 from app.services.review_job_service import review_job_service
 from app.services.review_job_store import ReviewJobStore
 
@@ -39,10 +39,11 @@ def test_stream_returns_real_progress_events_for_running_job() -> None:
 def test_stream_sends_done_for_completed_job() -> None:
     store = ReviewJobStore()
     report = ReviewReport(
-        job_id="rev_stream_2",
-        status=ReviewJobStatus.completed,
         summary="done",
         risk_level="LOW",
+        stats=ReviewReportStats(),
+        changed_files=[],
+        changed_symbols=[],
         findings=[],
         review_comment="done",
     )

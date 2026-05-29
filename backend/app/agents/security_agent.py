@@ -12,7 +12,7 @@ def run(context: AgentContext) -> AgentFindingsResult:
         if changed_lines:
             findings.append(
                 ReviewFinding(
-                    id=f"finding_{uuid4().hex[:8]}",
+                    id=f"sec_{uuid4().hex[:8]}",
                     agent="security_agent",
                     file=file,
                     line=changed_lines[0],

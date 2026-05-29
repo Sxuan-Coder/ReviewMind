@@ -24,3 +24,4 @@ class ReviewJob:
 
     def mark_completed(self) -> None:
         self.completed_at = datetime.now(UTC)
+        self.mark_updated()
