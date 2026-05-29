@@ -63,6 +63,8 @@ export interface ChangedFile {
   deletions: number;
   changes: number;
   patch?: string;
+  old_code?: string;
+  new_code?: string;
   risk_count?: number;
 }
 
