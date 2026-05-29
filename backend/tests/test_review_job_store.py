@@ -1,3 +1,4 @@
+import anyio
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -5,7 +6,8 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.models.review_job import ReviewJob
 from app.schemas.review import CreateReviewJobRequest, ReviewJobStatus, ReviewReport
-from app.services.review_job_service import ReviewJobService
+from app.services.review_job_service import ReviewJobService, review_job_service
+from app.services.review_pipeline import ReviewPipelineResult
 from app.services.review_job_store import InvalidReviewJobTransitionError, ReviewJobNotFoundError, ReviewJobStore
 
 
@@ -13,11 +15,16 @@ def make_request() -> CreateReviewJobRequest:
     return CreateReviewJobRequest(pr_url="https://github.com/example/repo/pull/1")
 
 
+class NoopPipeline:
+    async def run(self, job: ReviewJob) -> ReviewPipelineResult:
+        return ReviewPipelineResult(pr_info={}, filtered_files={}, parsed_diff=[])
+
+
 def test_create_job_can_be_queried_from_store() -> None:
     store = ReviewJobStore()
-    service = ReviewJobService(store)
+    service = ReviewJobService(store, NoopPipeline())
 
-    response = service.create_job(make_request())
+    response = anyio.run(service.create_job, make_request())
     job = store.get(response.job_id)
 
     assert response.status == ReviewJobStatus.pending
@@ -64,14 +71,19 @@ def test_service_maps_missing_job_to_404() -> None:
 
 
 def test_review_job_state_endpoint_returns_created_job() -> None:
+    original_pipeline = review_job_service._pipeline
+    review_job_service._pipeline = NoopPipeline()
     client = TestClient(app)
-    create_response = client.post(
-        "/api/v1/review/jobs",
-        json={"pr_url": "https://github.com/example/repo/pull/1"},
-    )
-    job_id = create_response.json()["data"]["job_id"]
+    try:
+        create_response = client.post(
+            "/api/v1/review/jobs",
+            json={"pr_url": "https://github.com/example/repo/pull/1"},
+        )
+        job_id = create_response.json()["data"]["job_id"]
 
-    state_response = client.get(f"/api/v1/review/jobs/{job_id}/state")
+        state_response = client.get(f"/api/v1/review/jobs/{job_id}/state")
+    finally:
+        review_job_service._pipeline = original_pipeline
 
     assert state_response.status_code == 200
     body = state_response.json()

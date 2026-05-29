@@ -14,6 +14,7 @@ class ReviewJob:
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     error_message: str | None = None
     progress_events: list[dict[str, Any]] = field(default_factory=list)
+    pipeline_result: dict[str, Any] | None = None
     report: ReviewReport | None = None
 
     def mark_updated(self) -> None:

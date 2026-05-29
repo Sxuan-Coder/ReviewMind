@@ -15,7 +15,7 @@ router = APIRouter(prefix="/review", tags=["review"])
 @router.post("/jobs", response_model=ApiResponse[CreateReviewJobResponse])
 async def create_review_job(request: CreateReviewJobRequest) -> ApiResponse[CreateReviewJobResponse]:
     return success_response(
-        review_job_service.create_job(request),
+        await review_job_service.create_job(request),
         message="review job created",
         code=20200,
     )
