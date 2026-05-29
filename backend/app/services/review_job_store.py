@@ -62,5 +62,14 @@ class ReviewJobStore:
         job.mark_updated()
         return job
 
+    def save_pipeline_result(self, job_id: str, result: object) -> ReviewJob:
+        job = self.get(job_id)
+        if hasattr(result, "__dict__"):
+            job.pipeline_result = dict(result.__dict__)
+        else:
+            job.pipeline_result = {"result": result}
+        job.mark_updated()
+        return job
+
 
 review_job_store = ReviewJobStore()

@@ -55,6 +55,7 @@ class ReviewJobSnapshot(BaseModel):
     updated_at: datetime
     error_message: str | None = None
     progress_events: list[dict[str, Any]] = Field(default_factory=list)
+    pipeline_result: dict[str, Any] | None = None
 
 
 class ReviewReport(BaseModel):
