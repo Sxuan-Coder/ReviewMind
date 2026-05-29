@@ -1,5 +1,10 @@
-import { cn } from '../lib/utils';
+import { cn } from '@/lib/utils';
 import { RiskBadge } from './RiskBadge';
+import { Card, CardContent } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Progress } from '@/components/ui/progress';
+import { ChevronDown, ChevronUp, Locate } from 'lucide-react';
 import type { Finding } from '../types';
 
 interface FindingCardProps {
@@ -10,80 +15,82 @@ interface FindingCardProps {
 }
 
 const levelBorderColors: Record<string, string> = {
-  CRITICAL: 'border-red-500/25',
-  HIGH: 'border-orange-500/25',
-  MEDIUM: 'border-yellow-500/25',
-  LOW: 'border-blue-500/25',
-  SUGGESTION: 'border-gray-500/25',
+  CRITICAL: 'border-l-red-500/40',
+  HIGH: 'border-l-orange-500/40',
+  MEDIUM: 'border-l-yellow-500/40',
+  LOW: 'border-l-blue-500/40',
+  SUGGESTION: 'border-l-zinc-500/40',
 };
 
 export function FindingCard({ finding, expanded = false, onToggle, onJumpToDiff }: FindingCardProps) {
   return (
-    <div
+    <Card
       className={cn(
-        'rounded-xl border bg-white/[0.03] p-5 transition-all hover:bg-white/[0.05]',
-        levelBorderColors[finding.level] || 'border-gray-500/25',
+        'bg-zinc-900/40 border-l-2 border-zinc-800/60 transition-all hover:bg-zinc-800/30 py-0 gap-0',
+        levelBorderColors[finding.level] || 'border-l-zinc-500/40',
       )}
     >
-      <div className="flex items-start justify-between gap-3 mb-3">
-        <div className="flex items-center gap-2 flex-wrap min-w-0">
-          <RiskBadge level={finding.level} />
-          <span className="text-xs font-mono text-cyan-400/80 bg-cyan-950/30 px-2 py-0.5 rounded">
-            {finding.type}
-          </span>
-          <span className="text-xs text-gray-500">{finding.agent}</span>
-        </div>
-        {onToggle && (
-          <button
-            onClick={onToggle}
-            className="text-xs text-gray-500 hover:text-gray-300 shrink-0 transition-colors"
-          >
-            {expanded ? '收起' : '展开'}
-          </button>
-        )}
-      </div>
-
-      <div className="flex items-center gap-2 text-sm font-mono text-gray-400 mb-2">
-        <span className="text-gray-500">{finding.file}</span>
-        <span className="text-cyan-500/60">L{finding.line}</span>
-        {finding.symbol && (
-          <span className="text-purple-400/70 truncate">→ {finding.symbol}</span>
-        )}
-        {onJumpToDiff && (
-          <button
-            onClick={(e) => { e.stopPropagation(); onJumpToDiff(); }}
-            className="ml-auto shrink-0 text-xs text-cyan-500/60 hover:text-cyan-400 border border-cyan-500/20 rounded px-2 py-0.5 transition-colors"
-          >
-            定位 Diff
-          </button>
-        )}
-      </div>
-
-      <p className="text-sm text-gray-300 leading-relaxed mb-3">{finding.description}</p>
-
-      <div className="bg-emerald-950/20 border border-emerald-500/15 rounded-lg p-3">
-        <span className="text-xs font-semibold text-emerald-400/80">建议: </span>
-        <span className="text-sm text-emerald-300/80">{finding.suggestion}</span>
-      </div>
-
-      {expanded && finding.code_snippet && (
-        <pre className="mt-3 rounded-lg bg-gray-950/70 border border-gray-700/30 p-3 text-xs font-mono text-gray-300 overflow-auto whitespace-pre-wrap">
-          {finding.code_snippet}
-        </pre>
-      )}
-
-      {finding.confidence > 0 && (
-        <div className="mt-3 flex items-center gap-2">
-          <span className="text-xs text-gray-500">置信度</span>
-          <div className="h-1.5 w-20 rounded-full bg-gray-800 overflow-hidden">
-            <div
-              className="h-full rounded-full bg-cyan-500/60 transition-all"
-              style={{ width: `${Math.round(finding.confidence * 100)}%` }}
-            />
+      <CardContent className="p-4">
+        <div className="flex items-start justify-between gap-3 mb-3">
+          <div className="flex items-center gap-2 flex-wrap min-w-0">
+            <RiskBadge level={finding.level} />
+            <Badge variant="outline" className="text-xs font-mono text-zinc-400 bg-zinc-900/60 border-zinc-800/60">
+              {finding.type}
+            </Badge>
+            <span className="text-xs text-zinc-600">{finding.agent}</span>
           </div>
-          <span className="text-xs text-gray-500">{Math.round(finding.confidence * 100)}%</span>
+          {onToggle && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onToggle}
+              className="text-xs text-zinc-500 hover:text-zinc-200 h-6 px-2"
+            >
+              {expanded ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />}
+              {expanded ? '收起' : '展开'}
+            </Button>
+          )}
         </div>
-      )}
-    </div>
+
+        <div className="flex items-center gap-2 text-sm font-mono text-zinc-600 mb-2">
+          <span>{finding.file}</span>
+          <span className="text-zinc-500">L{finding.line}</span>
+          {finding.symbol && (
+            <span className="text-purple-400/70 truncate">→ {finding.symbol}</span>
+          )}
+          {onJumpToDiff && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={(e) => { e.stopPropagation(); onJumpToDiff(); }}
+              className="ml-auto shrink-0 text-xs text-zinc-500 hover:text-zinc-200 border-zinc-800/60 h-6 px-2"
+            >
+              <Locate className="size-3" /> 定位 Diff
+            </Button>
+          )}
+        </div>
+
+        <p className="text-sm text-zinc-300 leading-relaxed mb-3">{finding.description}</p>
+
+        <div className="bg-emerald-950/15 border border-emerald-500/15 rounded-lg p-3">
+          <span className="text-xs font-semibold text-emerald-400/80">建议: </span>
+          <span className="text-sm text-emerald-300/70">{finding.suggestion}</span>
+        </div>
+
+        {expanded && finding.code_snippet && (
+          <pre className="mt-3 rounded-lg bg-zinc-950/70 border border-zinc-800/40 p-3 text-xs font-mono text-zinc-300 overflow-auto whitespace-pre-wrap">
+            {finding.code_snippet}
+          </pre>
+        )}
+
+        {finding.confidence > 0 && (
+          <div className="mt-3 flex items-center gap-2">
+            <span className="text-xs text-zinc-600">置信度</span>
+            <Progress value={Math.round(finding.confidence * 100)} className="h-1.5 w-20" />
+            <span className="text-xs text-zinc-600">{Math.round(finding.confidence * 100)}%</span>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

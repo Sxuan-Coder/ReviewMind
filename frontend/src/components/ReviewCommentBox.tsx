@@ -1,4 +1,7 @@
 import { useState } from 'react';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Copy, Check } from 'lucide-react';
 
 interface ReviewCommentBoxProps {
   content: string;
@@ -13,7 +16,6 @@ export function ReviewCommentBox({ content }: ReviewCommentBoxProps) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      // fallback
       const textarea = document.createElement('textarea');
       textarea.value = content;
       document.body.appendChild(textarea);
@@ -29,12 +31,15 @@ export function ReviewCommentBox({ content }: ReviewCommentBoxProps) {
     <div className="relative">
       <div className="flex items-center justify-between mb-2">
         <h3 className="section-label">Review Comment</h3>
-        <button
+        <Button
+          variant="outline"
+          size="sm"
           onClick={handleCopy}
-          className="rounded-lg border border-cyan-500/25 bg-cyan-950/30 px-4 py-1.5 text-xs font-medium text-cyan-400 hover:bg-cyan-950/50 transition-colors"
+          className="border-zinc-800/60 bg-zinc-900/40 text-zinc-400 hover:text-zinc-200"
         >
-          {copied ? '已复制 ✓' : '复制评论'}
-        </button>
+          {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+          {copied ? '已复制' : '复制评论'}
+        </Button>
       </div>
       <pre className="comment-box text-sm leading-relaxed font-sans">{content}</pre>
     </div>

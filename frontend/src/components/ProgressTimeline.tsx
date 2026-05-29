@@ -1,4 +1,8 @@
-import { cn } from '../lib/utils';
+import { cn } from '@/lib/utils';
+import { Progress } from '@/components/ui/progress';
+import { Card, CardContent } from '@/components/ui/card';
+import { motion } from 'framer-motion';
+import { Check, Loader2 } from 'lucide-react';
 import type { StepType, ReviewProgress } from '../types';
 
 interface ProgressTimelineProps {
@@ -33,61 +37,60 @@ export function ProgressTimeline({ progress, stepHistory }: ProgressTimelineProp
   const currentStep = progress?.step;
 
   return (
-    <div className="timeline-card">
-      <div className="section-label">Agent Workflow</div>
+    <Card className="timeline-card py-0 gap-0">
+      <CardContent className="p-6">
+        <div className="section-label">Agent Workflow</div>
 
-      {/* Progress bar */}
-      {progress && (
-        <div className="mt-4 mb-5">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-xs text-gray-500">{progress.message}</span>
-            <span className="text-xs font-mono text-cyan-400">{progress.percent}%</span>
+        {progress && (
+          <div className="mt-4 mb-5">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-xs text-zinc-500">{progress.message}</span>
+              <span className="text-xs font-mono text-zinc-400">{progress.percent}%</span>
+            </div>
+            <Progress value={progress.percent} className="h-1.5" />
           </div>
-          <div className="h-1.5 rounded-full bg-gray-800 overflow-hidden">
-            <div
-              className="h-full rounded-full bg-gradient-to-r from-cyan-500 to-emerald-400 transition-all duration-700 ease-out"
-              style={{ width: `${progress.percent}%` }}
-            />
-          </div>
-        </div>
-      )}
+        )}
 
-      {/* Step list */}
-      <div className="timeline-list">
-        {STEP_DEFINITIONS.map((step) => {
-          const status = stepStatus(step.key, currentStep, stepHistory);
-          return (
-            <div className="timeline-item" key={step.key}>
-              <span
-                className={cn(
-                  'timeline-dot shrink-0',
-                  status === 'active' && 'active animate-pulse-glow',
-                  status === 'done' && 'bg-emerald-500/80 shadow-[0_0_12px_rgba(34,197,94,0.4)]',
-                )}
-              />
-              <div className="flex-1 min-w-0">
+        <div className="timeline-list">
+          {STEP_DEFINITIONS.map((step, index) => {
+            const status = stepStatus(step.key, currentStep, stepHistory);
+            return (
+              <motion.div
+                className="timeline-item"
+                key={step.key}
+                initial={{ opacity: 0, x: -10 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ duration: 0.2, delay: index * 0.03 }}
+              >
                 <span
                   className={cn(
-                    'text-sm font-medium block truncate',
-                    status === 'active' && 'text-cyan-300',
-                    status === 'done' && 'text-gray-400',
-                    status === 'pending' && 'text-gray-600',
+                    'timeline-dot shrink-0',
+                    status === 'active' && 'active animate-pulse-glow',
+                    status === 'done' && 'bg-emerald-500/70 shadow-[0_0_10px_rgba(34,197,94,0.3)]',
                   )}
-                >
-                  {step.label}
-                </span>
-                <span className="text-xs text-gray-600 block truncate">{step.description}</span>
-              </div>
-              {status === 'done' && <span className="text-emerald-500 text-xs shrink-0">✓</span>}
-              {status === 'active' && (
-                <span className="flex items-center gap-1 shrink-0">
-                  <span className="h-1.5 w-1.5 rounded-full bg-cyan-400 animate-pulse" />
-                </span>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
+                />
+                <div className="flex-1 min-w-0">
+                  <span
+                    className={cn(
+                      'text-sm font-medium block truncate',
+                      status === 'active' && 'text-zinc-200',
+                      status === 'done' && 'text-zinc-500',
+                      status === 'pending' && 'text-zinc-700',
+                    )}
+                  >
+                    {step.label}
+                  </span>
+                  <span className="text-xs text-zinc-700 block truncate">{step.description}</span>
+                </div>
+                {status === 'done' && <Check className="size-3.5 text-emerald-500 shrink-0" />}
+                {status === 'active' && (
+                  <Loader2 className="size-3.5 text-zinc-400 shrink-0 animate-spin" />
+                )}
+              </motion.div>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
   );
 }

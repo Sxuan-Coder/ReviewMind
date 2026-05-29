@@ -1,4 +1,6 @@
 import { useNavigate } from 'react-router-dom';
+import { ArrowLeft } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 
 interface NavHeaderProps {
   title?: string;
@@ -9,24 +11,27 @@ export function NavHeader({ title, showBack = true }: NavHeaderProps) {
   const navigate = useNavigate();
 
   return (
-    <header className="flex items-center justify-between py-5 px-0">
+    <header className="flex items-center justify-between py-4 px-0 border-b border-zinc-800/60 mb-6">
       <div className="flex items-center gap-4">
         {showBack && (
-          <button
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => navigate('/')}
-            className="rounded-lg border border-gray-600/30 bg-white/[0.03] px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200 hover:bg-white/[0.06] transition-colors"
+            className="border-zinc-800/60 bg-zinc-900/40 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800/40"
           >
-            ← 返回首页
-          </button>
+            <ArrowLeft className="size-3.5" />
+            返回首页
+          </Button>
         )}
         <span
-          className="text-lg font-bold text-cyan-400/90 tracking-tight cursor-pointer"
+          className="text-lg font-bold text-zinc-200 tracking-tight cursor-pointer hover:text-zinc-100 transition-colors"
           onClick={() => navigate('/')}
         >
           ReviewMind
         </span>
       </div>
-      {title && <span className="text-sm text-gray-500">{title}</span>}
+      {title && <span className="text-xs text-zinc-600 font-mono">{title}</span>}
     </header>
   );
 }
