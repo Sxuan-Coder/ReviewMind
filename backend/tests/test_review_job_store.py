@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.models.review_job import ReviewJob
-from app.schemas.review import CreateReviewJobRequest, ReviewJobStatus, ReviewReport
+from app.schemas.review import CreateReviewJobRequest, ReviewJobStatus, ReviewReport, ReviewReportStats
 from app.services.review_job_service import ReviewJobService, review_job_service
 from app.services.review_pipeline import ReviewPipelineResult
 from app.services.review_job_store import InvalidReviewJobTransitionError, ReviewJobNotFoundError, ReviewJobStore
@@ -45,10 +45,11 @@ def test_job_status_transition_boundaries() -> None:
 
     store.update_status("rev_1", ReviewJobStatus.running)
     report = ReviewReport(
-        job_id="rev_1",
-        status=ReviewJobStatus.completed,
         summary="done",
         risk_level="LOW",
+        stats=ReviewReportStats(),
+        changed_files=[],
+        changed_symbols=[],
         findings=[],
         review_comment="done",
     )

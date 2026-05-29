@@ -12,7 +12,7 @@ def run(context: AgentContext) -> AgentFindingsResult:
         if additions > 50:
             findings.append(
                 ReviewFinding(
-                    id=f"finding_{uuid4().hex[:8]}",
+                    id=f"perf_{uuid4().hex[:8]}",
                     agent="performance_agent",
                     file=file,
                     line=1,
