@@ -30,6 +30,7 @@ from app.services.review_job_store import (
     InvalidReviewJobTransitionError,
     ReviewJobNotFoundError,
     ReviewJobStore,
+    event_queue_registry,
     review_job_store,
 )
 from app.services.review_pipeline import ReviewPipeline
@@ -52,9 +53,11 @@ class ReviewJobService:
     async def create_job(self, request: CreateReviewJobRequest) -> CreateReviewJobResponse:
         job_id = f"rev_{uuid4().hex[:8]}"
         job = ReviewJob(job_id=job_id, pr_url=str(request.pr_url))
-        job.event_queue = asyncio.Queue(maxsize=256)
-        self._store.create(job)
-        self._store.add_progress_event(
+        eq = asyncio.Queue(maxsize=256)
+        event_queue_registry.register(job_id, eq)
+        job.event_queue = eq
+        await self._store.create(job)
+        await self._store.add_progress_event(
             job_id,
             {"step": "JOB_CREATED", "percent": 0, "message": "Review Job 已创建"},
         )
@@ -74,8 +77,8 @@ class ReviewJobService:
         """构建 pipeline 协程，供 task_runner 调用。"""
         return await self._pipeline.run(job)
 
-    def get_report(self, job_id: str) -> ReviewReport:
-        job = self._get_job_or_404(job_id)
+    async def get_report(self, job_id: str) -> ReviewReport:
+        job = await self._get_job_or_404(job_id)
         if job.report is not None:
             return job.report
 
@@ -89,8 +92,8 @@ class ReviewJobService:
             review_comment="## AI Review Summary\n\n当前任务已进入内存状态仓库，暂无真实风险发现。",
         )
 
-    def get_job_detail(self, job_id: str) -> ReviewJobDetailResponse:
-        job = self._get_job_or_404(job_id)
+    async def get_job_detail(self, job_id: str) -> ReviewJobDetailResponse:
+        job = await self._get_job_or_404(job_id)
         pr = _build_pr_info(job.pr_info) if job.pr_info else None
         progress = _last_progress(job)
         findings = _collect_findings(job)
@@ -121,8 +124,8 @@ class ReviewJobService:
             error_message=job.error_message,
         )
 
-    def get_job(self, job_id: str) -> ReviewJobSnapshot:
-        job = self._get_job_or_404(job_id)
+    async def get_job(self, job_id: str) -> ReviewJobSnapshot:
+        job = await self._get_job_or_404(job_id)
         return ReviewJobSnapshot(
             job_id=job.job_id,
             pr_url=job.pr_url,
@@ -134,20 +137,20 @@ class ReviewJobService:
             pipeline_result=job.pipeline_result,
         )
 
-    def cancel_job(self, job_id: str) -> ReviewJobDetailResponse:
-        job = self._get_job_or_404(job_id)
+    async def cancel_job(self, job_id: str) -> ReviewJobDetailResponse:
+        await self._get_job_or_404(job_id)
         try:
-            self._store.update_status(job_id, ReviewJobStatus.cancelled)
+            await self._store.update_status(job_id, ReviewJobStatus.cancelled)
         except InvalidReviewJobTransitionError as exc:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=str(exc),
             ) from exc
-        return self.get_job_detail(job_id)
+        return await self.get_job_detail(job_id)
 
-    def get_job_list(self, page: int = 1, page_size: int = 10) -> JobListResponse:
+    async def get_job_list(self, page: int = 1, page_size: int = 10) -> JobListResponse:
         all_jobs = sorted(
-            self._store.get_all(),
+            await self._store.get_all(),
             key=lambda j: j.created_at,
             reverse=True,
         )
@@ -157,9 +160,9 @@ class ReviewJobService:
         items = [_to_job_list_item(j) for j in page_jobs]
         return JobListResponse(items=items, page=page, page_size=page_size, total=total)
 
-    def _get_job_or_404(self, job_id: str) -> ReviewJob:
+    async def _get_job_or_404(self, job_id: str) -> ReviewJob:
         try:
-            return self._store.get(job_id)
+            return await self._store.get(job_id)
         except ReviewJobNotFoundError as exc:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

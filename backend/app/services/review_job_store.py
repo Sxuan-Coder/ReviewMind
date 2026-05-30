@@ -1,5 +1,22 @@
-from app.models.review_job import ReviewJob
+"""ReviewJob 数据库持久化存储。
+
+提供与原内存 ReviewJobStore 相同的接口，内部改用 SQLAlchemy 操作数据库。
+"""
+
+import asyncio
+import json
+import logging
+from datetime import UTC, datetime
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.database import async_session
+from app.models.db_models import ReviewJobModel
+from app.models.review_job import ReviewJob, _QUEUE_DONE
 from app.schemas.review import ReviewJobStatus, ReviewReport
+
+logger = logging.getLogger(__name__)
 
 
 class ReviewJobNotFoundError(Exception):
@@ -16,6 +33,8 @@ class InvalidReviewJobTransitionError(Exception):
 
 
 class ReviewJobStore:
+    """基于 SQLAlchemy 的 ReviewJob 持久化存储。"""
+
     allowed_transitions: dict[ReviewJobStatus, set[ReviewJobStatus]] = {
         ReviewJobStatus.pending: {ReviewJobStatus.running, ReviewJobStatus.failed, ReviewJobStatus.cancelled},
         ReviewJobStatus.running: {ReviewJobStatus.completed, ReviewJobStatus.failed, ReviewJobStatus.cancelled},
@@ -24,23 +43,42 @@ class ReviewJobStore:
         ReviewJobStatus.cancelled: set(),
     }
 
-    def __init__(self) -> None:
-        self._jobs: dict[str, ReviewJob] = {}
-
-    def create(self, job: ReviewJob) -> ReviewJob:
-        self._jobs[job.job_id] = job
+    async def create(self, job: ReviewJob) -> ReviewJob:
+        async with async_session() as session:
+            model = ReviewJobModel(
+                job_id=job.job_id,
+                pr_url=job.pr_url,
+                status=job.status.value,
+                created_at=job.created_at,
+                updated_at=job.updated_at,
+                completed_at=job.completed_at,
+                error_message=job.error_message,
+                pr_info=json.dumps(job.pr_info, ensure_ascii=False) if job.pr_info else None,
+                progress_events=json.dumps(job.progress_events, ensure_ascii=False),
+                pipeline_result=json.dumps(job.pipeline_result, ensure_ascii=False) if job.pipeline_result else None,
+                report=job.report.model_dump_json() if job.report else None,
+            )
+            session.add(model)
+            await session.commit()
         return job
 
-    def get(self, job_id: str) -> ReviewJob:
-        job = self._jobs.get(job_id)
-        if job is None:
+    async def get(self, job_id: str) -> ReviewJob:
+        async with async_session() as session:
+            result = await session.execute(
+                select(ReviewJobModel).where(ReviewJobModel.job_id == job_id)
+            )
+            model = result.scalar_one_or_none()
+        if model is None:
             raise ReviewJobNotFoundError(job_id)
-        return job
+        return self._to_job(model)
 
-    def get_all(self) -> list[ReviewJob]:
-        return list(self._jobs.values())
+    async def get_all(self) -> list[ReviewJob]:
+        async with async_session() as session:
+            result = await session.execute(select(ReviewJobModel))
+            models = result.scalars().all()
+        return [self._to_job(m) for m in models]
 
-    def update_status(
+    async def update_status(
         self,
         job_id: str,
         status: ReviewJobStatus,
@@ -48,50 +86,148 @@ class ReviewJobStore:
         error_message: str | None = None,
         report: ReviewReport | None = None,
     ) -> ReviewJob:
-        job = self.get(job_id)
-        allowed = self.allowed_transitions[job.status]
-        if status not in allowed:
-            raise InvalidReviewJobTransitionError(job.status, status)
+        async with async_session() as session:
+            result = await session.execute(
+                select(ReviewJobModel).where(ReviewJobModel.job_id == job_id)
+            )
+            model = result.scalar_one_or_none()
+            if model is None:
+                raise ReviewJobNotFoundError(job_id)
 
-        job.status = status
-        if error_message is not None:
-            job.error_message = error_message
-        if report is not None:
-            job.report = report
-        if status == ReviewJobStatus.completed:
-            job.mark_completed()
-        job.mark_updated()
+            current_status = ReviewJobStatus(model.status)
+            allowed = self.allowed_transitions[current_status]
+            if status not in allowed:
+                raise InvalidReviewJobTransitionError(current_status, status)
 
-        # 通知 SSE 流任务已结束
+            model.status = status.value
+            if error_message is not None:
+                model.error_message = error_message
+            if report is not None:
+                model.report = report.model_dump_json()
+            if status == ReviewJobStatus.completed:
+                model.completed_at = datetime.now(UTC)
+            model.updated_at = datetime.now(UTC)
+
+            await session.commit()
+            await session.refresh(model)
+
+        job = self._to_job(model)
         if status in {ReviewJobStatus.completed, ReviewJobStatus.failed, ReviewJobStatus.cancelled}:
-            job.signal_done()
+            eq = event_queue_registry.get(job_id)
+            if eq is not None:
+                try:
+                    eq.put_nowait(_QUEUE_DONE)
+                except asyncio.QueueFull:
+                    pass
+            event_queue_registry.remove(job_id)
         return job
 
-    def add_progress_event(self, job_id: str, event: dict[str, object]) -> ReviewJob:
-        job = self.get(job_id)
-        job.progress_events.append(event)
-        job.push_event(event)  # 推入 SSE 实时队列
-        job.mark_updated()
-        return job
+    async def add_progress_event(self, job_id: str, event: dict[str, object]) -> ReviewJob:
+        async with async_session() as session:
+            result = await session.execute(
+                select(ReviewJobModel).where(ReviewJobModel.job_id == job_id)
+            )
+            model = result.scalar_one_or_none()
+            if model is None:
+                raise ReviewJobNotFoundError(job_id)
 
-    def get_progress_events(self, job_id: str) -> list[dict[str, object]]:
-        job = self.get(job_id)
-        return list(job.progress_events)
+            events = json.loads(model.progress_events) if model.progress_events else []
+            events.append(event)
+            model.progress_events = json.dumps(events, ensure_ascii=False)
+            model.updated_at = datetime.now(UTC)
+            await session.commit()
 
-    def save_pr_info(self, job_id: str, pr_info: dict[str, object]) -> ReviewJob:
-        job = self.get(job_id)
-        job.pr_info = pr_info
-        job.mark_updated()
-        return job
+        # 推送到内存事件队列（供 SSE 实时流）
+        eq = event_queue_registry.get(job_id)
+        if eq is not None:
+            try:
+                eq.put_nowait(event)
+            except asyncio.QueueFull:
+                pass
+        return self._to_job(model)
 
-    def save_pipeline_result(self, job_id: str, result: object) -> ReviewJob:
-        job = self.get(job_id)
-        if hasattr(result, "__dict__"):
-            job.pipeline_result = dict(result.__dict__)
-        else:
-            job.pipeline_result = {"result": result}
-        job.mark_updated()
-        return job
+    async def get_progress_events(self, job_id: str) -> list[dict[str, object]]:
+        async with async_session() as session:
+            result = await session.execute(
+                select(ReviewJobModel).where(ReviewJobModel.job_id == job_id)
+            )
+            model = result.scalar_one_or_none()
+        if model is None:
+            raise ReviewJobNotFoundError(job_id)
+        return json.loads(model.progress_events) if model.progress_events else []
+
+    async def save_pr_info(self, job_id: str, pr_info: dict[str, object]) -> ReviewJob:
+        async with async_session() as session:
+            result = await session.execute(
+                select(ReviewJobModel).where(ReviewJobModel.job_id == job_id)
+            )
+            model = result.scalar_one_or_none()
+            if model is None:
+                raise ReviewJobNotFoundError(job_id)
+            model.pr_info = json.dumps(pr_info, ensure_ascii=False)
+            model.updated_at = datetime.now(UTC)
+            await session.commit()
+        return self._to_job(model)
+
+    async def save_pipeline_result(self, job_id: str, result: object) -> ReviewJob:
+        async with async_session() as session:
+            res = await session.execute(
+                select(ReviewJobModel).where(ReviewJobModel.job_id == job_id)
+            )
+            model = res.scalar_one_or_none()
+            if model is None:
+                raise ReviewJobNotFoundError(job_id)
+            if hasattr(result, "__dict__"):
+                data = dict(result.__dict__)
+            else:
+                data = {"result": result}
+            model.pipeline_result = json.dumps(data, ensure_ascii=False, default=str)
+            model.updated_at = datetime.now(UTC)
+            await session.commit()
+        return self._to_job(model)
+
+    def _to_job(self, model: ReviewJobModel) -> ReviewJob:
+        """将 ORM 模型转换为领域对象 ReviewJob。"""
+        report = None
+        if model.report:
+            try:
+                report = ReviewReport.model_validate_json(model.report)
+            except Exception:
+                logger.warning("Failed to parse report for job %s", model.job_id)
+
+        return ReviewJob(
+            job_id=model.job_id,
+            pr_url=model.pr_url,
+            status=ReviewJobStatus(model.status),
+            created_at=model.created_at,
+            updated_at=model.updated_at,
+            completed_at=model.completed_at,
+            error_message=model.error_message,
+            pr_info=json.loads(model.pr_info) if model.pr_info else None,
+            progress_events=json.loads(model.progress_events) if model.progress_events else [],
+            pipeline_result=json.loads(model.pipeline_result) if model.pipeline_result else None,
+            report=report,
+        )
 
 
+# 全局单例，兼容现有导入
 review_job_store = ReviewJobStore()
+
+
+class _EventQueueRegistry:
+    """内存事件队列注册表：SSE 实时流需要内存队列，DB 持久化不含队列引用。"""
+
+    def __init__(self) -> None:
+        self._queues: dict[str, asyncio.Queue] = {}
+
+    def register(self, job_id: str, queue: asyncio.Queue) -> None:
+        self._queues[job_id] = queue
+
+    def get(self, job_id: str) -> asyncio.Queue | None:
+        return self._queues.get(job_id)
+
+    def remove(self, job_id: str) -> None:
+        self._queues.pop(job_id, None)
+
+
+event_queue_registry = _EventQueueRegistry()

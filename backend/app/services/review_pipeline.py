@@ -1,13 +1,4 @@
-"""ReviewPipeline：委托 ReviewGraph 执行完整的 AI Review 工作流。
-
-工作流节点顺序：
-    fetch_pr → fetch_files → diff_filter → parse_diff → ast_context
-    → summary_agent → security_agent → performance_agent → test_agent
-    → risk_judge → report_agent
-
-每个节点由 ReviewGraph 编排，自动推送 progress/finding/chunk 等 SSE 事件。
-ReviewPipeline 只负责创建 Graph 实例并等待结果。
-"""
+"""ReviewPipeline：委托 ReviewGraph 执行完整的 AI Review 工作流。"""
 
 import json
 from dataclasses import dataclass
@@ -32,26 +23,18 @@ class ReviewPipeline:
         self._github_client = github_client or GitHubClient()
 
     async def run(self, job: ReviewJob) -> ReviewPipelineResult:
-        """委托 ReviewGraph 执行完整的多 Agent + LLM Review 工作流。
-
-        ReviewGraph 负责：
-        1. 编排 11 个节点的有序执行
-        2. 推送 progress/chunk/finding SSE 事件
-        3. Agent 调用 LLM 进行 AI 分析
-        4. Risk Judge 聚合 + Report Agent 生成最终报告
-        5. 容错：非关键节点失败降级，关键节点失败标记 failed
-        """
+        """委托 ReviewGraph 执行完整的多 Agent + LLM Review 工作流。"""
         graph = ReviewGraph(self._store, self._github_client)
         result = await graph.run(job)
 
-        # SSE 推送文件列表（供前端实时展示）
+        # SSE 推送文件列表
         included = result.filtered_files.get("included_files", [])
         file_names = [
             f.get("filename", f.get("file", "unknown")) if isinstance(f, dict) else getattr(f, "filename", "unknown")
             for f in included
         ]
         if file_names:
-            self._store.add_progress_event(
+            await self._store.add_progress_event(
                 job.job_id,
                 {
                     "type": "chunk",
@@ -65,5 +48,5 @@ class ReviewPipeline:
             filtered_files=result.filtered_files,
             parsed_diff=result.parsed_diff,
         )
-        self._store.save_pipeline_result(job.job_id, pipeline_result)
+        await self._store.save_pipeline_result(job.job_id, pipeline_result)
         return pipeline_result

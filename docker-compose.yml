@@ -7,10 +7,10 @@ services:
       - "8000:8000"
     env_file:
       - ./backend/.env.example
-    # PostgreSQL 和 Redis 启用后取消注释
-    # depends_on:
-    #   - postgres
-    #   - redis
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://reviewmind:reviewmind@postgres:5432/reviewmind
+    depends_on:
+      - postgres
 
   frontend:
     build:
@@ -21,17 +21,16 @@ services:
     depends_on:
       - backend
 
-  # PostgreSQL 持久化 — 启用后取消注释
-  # postgres:
-  #   image: postgres:16-alpine
-  #   environment:
-  #     POSTGRES_DB: reviewmind
-  #     POSTGRES_USER: reviewmind
-  #     POSTGRES_PASSWORD: reviewmind
-  #   ports:
-  #     - "5432:5432"
-  #   volumes:
-  #     - pgdata:/var/lib/postgresql/data
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: reviewmind
+      POSTGRES_USER: reviewmind
+      POSTGRES_PASSWORD: reviewmind
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
 
   # Redis 缓存 — 启用后取消注释
   # redis:
@@ -39,5 +38,5 @@ services:
   #   ports:
   #     - "6379:6379"
 
-# volumes:
-#   pgdata:
+volumes:
+  pgdata:

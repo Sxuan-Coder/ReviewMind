@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = 30.0
     llm_mock_mode: bool = True
 
+    database_url: str = "sqlite+aiosqlite:///./reviewmind.db"
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

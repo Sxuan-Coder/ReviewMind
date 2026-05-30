@@ -54,14 +54,13 @@ def _run_async(coro: Callable[..., Coroutine], *args, **kwargs) -> Any:
     return result_holder[0] if result_holder else None
 
 
-def node_fetch_pr(state: ReviewGraphState, github_client: GitHubClient, store: ReviewJobStore) -> ReviewGraphState:
+async def node_fetch_pr(state: ReviewGraphState, github_client: GitHubClient, store: ReviewJobStore) -> ReviewGraphState:
     """节点 1：解析 PR URL 并拉取 GitHub PR 基本信息。"""
     try:
         pr_ref = parse_github_pr_url(state.pr_url)
-        import asyncio
-        pr_info = asyncio.get_event_loop().run_until_complete(github_client.fetch_pull_request(pr_ref))
+        pr_info = await github_client.fetch_pull_request(pr_ref)
         state.pr_info = pr_info.model_dump(mode="json")
-        store.save_pr_info(state.job_id, state.pr_info)
+        await store.save_pr_info(state.job_id, state.pr_info)
     except Exception as exc:
         state.error = f"FETCH_PR: {exc}"
     return state
@@ -73,7 +72,7 @@ async def node_fetch_pr_async(state: ReviewGraphState, github_client: GitHubClie
         pr_ref = parse_github_pr_url(state.pr_url)
         pr_info = await github_client.fetch_pull_request(pr_ref)
         state.pr_info = pr_info.model_dump(mode="json")
-        store.save_pr_info(state.job_id, state.pr_info)
+        await store.save_pr_info(state.job_id, state.pr_info)
     except Exception as exc:
         state.error = f"FETCH_PR: {exc}"
     return state
@@ -180,7 +179,7 @@ async def node_summary_agent(state: ReviewGraphState, _github_client: GitHubClie
         state.agent_results.append(result)
         # SSE 推送摘要文本流
         if result.summary:
-            _store.add_progress_event(
+            await _store.add_progress_event(
                 state.job_id,
                 {"type": "chunk", "target": "summary", "content": result.summary},
             )
@@ -211,7 +210,7 @@ async def node_security_agent(state: ReviewGraphState, _github_client: GitHubCli
         state.agent_results.append(result)
         # SSE 推送 finding 事件（"type":"finding" 放最后，避免被 f.type 覆盖）
         for f in result.findings:
-            _store.add_progress_event(
+            await _store.add_progress_event(
                 state.job_id,
                 {
                     "id": f.id, "agent": f.agent, "file": f.file, "line": f.line,
@@ -243,7 +242,7 @@ async def node_performance_agent(state: ReviewGraphState, _github_client: GitHub
         result = await performance_agent.run_async(ctx)
         state.agent_results.append(result)
         for f in result.findings:
-            _store.add_progress_event(
+            await _store.add_progress_event(
                 state.job_id,
                 {
                     "id": f.id, "agent": f.agent, "file": f.file, "line": f.line,
@@ -275,7 +274,7 @@ async def node_test_agent(state: ReviewGraphState, _github_client: GitHubClient,
         result = await test_agent.run_async(ctx)
         state.agent_results.append(result)
         for f in result.findings:
-            _store.add_progress_event(
+            await _store.add_progress_event(
                 state.job_id,
                 {
                     "id": f.id, "agent": f.agent, "file": f.file, "line": f.line,
@@ -294,7 +293,7 @@ async def node_test_agent(state: ReviewGraphState, _github_client: GitHubClient,
     return state
 
 
-def node_risk_judge(state: ReviewGraphState, _github_client: GitHubClient, _store: ReviewJobStore) -> ReviewGraphState:
+async def node_risk_judge(state: ReviewGraphState, _github_client: GitHubClient, _store: ReviewJobStore) -> ReviewGraphState:
     """节点 10：Risk Judge 聚合所有 agent findings。"""
     if state.error:
         return state
@@ -302,7 +301,7 @@ def node_risk_judge(state: ReviewGraphState, _github_client: GitHubClient, _stor
         state.aggregated_risk = risk_judge_agent.aggregate(state.agent_results)
         # SSE 推送最终风险统计
         if state.aggregated_risk:
-            _store.add_progress_event(
+            await _store.add_progress_event(
                 state.job_id,
                 {
                     "type": "chunk", "target": "report",
