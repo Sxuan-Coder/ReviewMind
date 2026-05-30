@@ -1,6 +1,6 @@
 """SQLAlchemy 异步数据库引擎与会话工厂。
 
-默认使用 SQLite（零外部依赖），通过 DATABASE_URL 配置切换 PostgreSQL。
+默认使用 PostgreSQL + pgvector，通过 DATABASE_URL 配置可切换 SQLite。
 """
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -18,8 +18,13 @@ async def get_session() -> AsyncSession:  # type: ignore[misc]
 
 
 async def init_db() -> None:
-    """启动时建表。"""
+    """启动时注册 pgvector 扩展并建表。"""
     from app.models.db_models import Base  # noqa: F811
 
     async with engine.begin() as conn:
+        # 仅 PostgreSQL 需要注册 pgvector 扩展
+        if "postgresql" in settings.database_url:
+            await conn.execute(
+                __import__("sqlalchemy").text("CREATE EXTENSION IF NOT EXISTS vector")
+            )
         await conn.run_sync(Base.metadata.create_all)
