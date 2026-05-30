@@ -145,12 +145,12 @@ class ReviewGraph:
             "performance_agent": lambda s: node_performance_agent(s, gc, st),
             "test_agent": lambda s: node_test_agent(s, gc, st),
             "risk_judge": lambda s: node_risk_judge(s, gc, st),
-            "report_agent": lambda s: node_report_agent(s, gc, st),
         }
         sync_dispatch: dict[str, Any] = {
             "diff_filter": lambda s: _sync(node_diff_filter, s, gc, st),
             "parse_diff": lambda s: _sync(node_parse_diff, s, gc, st),
             "ast_context": lambda s: _sync(node_ast_context, s, gc, st),
+            "report_agent": lambda s: _sync(node_report_agent, s, gc, st),
         }
         if node_name in async_dispatch:
             return await async_dispatch[node_name](state)

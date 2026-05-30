@@ -10,7 +10,6 @@ import { FileChangeList } from '../components/FileChangeList';
 import { ReviewCommentBox } from '../components/ReviewCommentBox';
 import { NavHeader } from '../components/NavHeader';
 import { Skeleton } from '@/components/ui/skeleton';
-import { NavHeader } from '../components/NavHeader';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
