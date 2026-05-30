@@ -22,6 +22,7 @@ async def run_async(context: AgentContext) -> AgentFindingsResult:
                 {"role": "system", "content": TEST_SYSTEM},
                 {"role": "user", "content": build_user_prompt(context)},
             ]
+            logger.info("[TEST_AGENT] Calling LLM... files=%d", len(context.parsed_diff))
             raw = await llm_client.chat(messages, model=None, temperature=0.1)
             parsed = try_parse_json(raw)
             findings = [
@@ -39,14 +40,16 @@ async def run_async(context: AgentContext) -> AgentFindingsResult:
                 for f in parsed.get("findings", [])
                 if isinstance(f, dict)
             ]
+            logger.info("[TEST_AGENT] LLM OK | findings=%d", len(findings))
             return AgentFindingsResult(
                 agent="test_agent",
                 findings=findings,
                 summary=f"Test agent found {len(findings)} issues.",
             )
         except (LLMClientError, Exception) as exc:
-            logger.warning("Test agent LLM call failed, using fallback: %s", exc)
+            logger.warning("[TEST_AGENT] LLM failed, fallback to rules | %s: %s", type(exc).__name__, exc)
 
+    logger.info("[TEST_AGENT] Using sync fallback (rules)")
     return run(context)
 
 
@@ -69,6 +72,7 @@ def run(context: AgentContext) -> AgentFindingsResult:
                     suggestion="Ensure test coverage is maintained.",
                 )
             )
+    logger.info("[TEST_AGENT] Fallback findings=%d", len(findings))
     return AgentFindingsResult(
         agent="test_agent",
         findings=findings,

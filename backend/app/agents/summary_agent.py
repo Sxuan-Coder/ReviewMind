@@ -20,24 +20,30 @@ async def run_async(context: AgentContext) -> AgentFindingsResult:
                 {"role": "system", "content": SUMMARY_SYSTEM},
                 {"role": "user", "content": build_user_prompt(context)},
             ]
+            logger.info("[SUMMARY_AGENT] Calling LLM... files=%d", len(context.parsed_diff))
             raw = await llm_client.chat(messages, model=None, temperature=0.2)
             parsed = try_parse_json(raw, fallback_key="summary")
+            logger.info("[SUMMARY_AGENT] LLM OK | summary_len=%d findings=%d",
+                        len(parsed.get("summary", "")), len(parsed.get("findings", [])))
             return AgentFindingsResult(
                 agent="summary_agent",
                 summary=parsed.get("summary", _fallback_summary(context)),
                 findings=[],
             )
         except (LLMClientError, Exception) as exc:
-            logger.warning("Summary agent LLM call failed, using fallback: %s", exc)
+            logger.warning("[SUMMARY_AGENT] LLM failed, fallback to rules | %s: %s", type(exc).__name__, exc)
 
+    logger.info("[SUMMARY_AGENT] Using sync fallback (rules)")
     return run(context)
 
 
 def run(context: AgentContext) -> AgentFindingsResult:
     """同步版本（mock / 降级路径）。"""
+    summary = _fallback_summary(context)
+    logger.info("[SUMMARY_AGENT] Fallback summary: %s", summary)
     return AgentFindingsResult(
         agent="summary_agent",
-        summary=_fallback_summary(context),
+        summary=summary,
         findings=[],
     )
 

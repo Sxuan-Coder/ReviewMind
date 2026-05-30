@@ -22,6 +22,7 @@ async def run_async(context: AgentContext) -> AgentFindingsResult:
                 {"role": "system", "content": SECURITY_SYSTEM},
                 {"role": "user", "content": build_user_prompt(context)},
             ]
+            logger.info("[SECURITY_AGENT] Calling LLM... files=%d", len(context.parsed_diff))
             raw = await llm_client.chat(messages, model=None, temperature=0.1)
             parsed = try_parse_json(raw)
             findings = [
@@ -39,14 +40,16 @@ async def run_async(context: AgentContext) -> AgentFindingsResult:
                 for f in parsed.get("findings", [])
                 if isinstance(f, dict)
             ]
+            logger.info("[SECURITY_AGENT] LLM OK | findings=%d", len(findings))
             return AgentFindingsResult(
                 agent="security_agent",
                 findings=findings,
                 summary=f"Security agent found {len(findings)} issues.",
             )
         except (LLMClientError, Exception) as exc:
-            logger.warning("Security agent LLM call failed, using fallback: %s", exc)
+            logger.warning("[SECURITY_AGENT] LLM failed, fallback to rules | %s: %s", type(exc).__name__, exc)
 
+    logger.info("[SECURITY_AGENT] Using sync fallback (rules)")
     return run(context)
 
 
@@ -70,6 +73,7 @@ def run(context: AgentContext) -> AgentFindingsResult:
                     suggestion="Real security rules will be implemented in later PRs.",
                 )
             )
+    logger.info("[SECURITY_AGENT] Fallback findings=%d", len(findings))
     return AgentFindingsResult(
         agent="security_agent",
         findings=findings,

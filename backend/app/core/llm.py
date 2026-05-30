@@ -39,9 +39,16 @@ class LLMClient:
         response_format: dict[str, str] | None = None,
     ) -> str:
         if self._mock_mode or not self.is_configured:
+            reason = "mock_mode enabled" if self._mock_mode else "no API key configured"
+            logger.info("[LLM] MOCK mode active (%s), skipping real call", reason)
             return self._mock_response(messages)
 
         resolved_model = model or settings.llm_model_summary
+        api_url = f"{self._api_base}/chat/completions"
+        logger.info(
+            "[LLM] Calling API | url=%s model=%s temperature=%s timeout=%ss",
+            api_url, resolved_model, temperature, self._timeout,
+        )
         payload: dict[str, Any] = {
             "model": resolved_model,
             "messages": messages,
@@ -49,6 +56,7 @@ class LLMClient:
         }
         if response_format is not None:
             payload["response_format"] = response_format
+            logger.info("[LLM] response_format=%s", response_format)
 
         headers = {
             "Authorization": f"Bearer {self._api_key}",
@@ -58,21 +66,29 @@ class LLMClient:
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 resp = await client.post(
-                    f"{self._api_base}/chat/completions",
+                    api_url,
                     headers=headers,
                     json=payload,
                 )
+                logger.info("[LLM] Response status=%s content_length=%s", resp.status_code, len(resp.content))
                 resp.raise_for_status()
                 data = resp.json()
-                return data["choices"][0]["message"]["content"]
+                content = data["choices"][0]["message"]["content"]
+                logger.info("[LLM] Success | model=%s input_tokens=%s output_tokens=%s",
+                    data.get("model", "?"),
+                    data.get("usage", {}).get("prompt_tokens", "?"),
+                    data.get("usage", {}).get("completion_tokens", "?"),
+                )
+                return content
         except httpx.TimeoutException as exc:
-            logger.error("LLM request timed out after %ss", self._timeout)
+            logger.error("[LLM] TIMEOUT after %ss | url=%s", self._timeout, api_url)
             raise LLMClientError(f"LLM request timed out: {exc}") from exc
         except httpx.HTTPStatusError as exc:
-            logger.error("LLM HTTP error: %s", exc.response.status_code)
-            raise LLMClientError(f"LLM HTTP {exc.response.status_code}") from exc
+            body = exc.response.text[:500]
+            logger.error("[LLM] HTTP_ERROR status=%s url=%s body=%s", exc.response.status_code, api_url, body)
+            raise LLMClientError(f"LLM HTTP {exc.response.status_code}: {body}") from exc
         except Exception as exc:
-            logger.error("LLM call failed: %s", type(exc).__name__)
+            logger.error("[LLM] UNEXPECTED_ERROR type=%s msg=%s", type(exc).__name__, exc)
             raise LLMClientError(f"LLM call failed: {exc}") from exc
 
     @staticmethod

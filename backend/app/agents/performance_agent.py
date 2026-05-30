@@ -22,6 +22,7 @@ async def run_async(context: AgentContext) -> AgentFindingsResult:
                 {"role": "system", "content": PERFORMANCE_SYSTEM},
                 {"role": "user", "content": build_user_prompt(context)},
             ]
+            logger.info("[PERF_AGENT] Calling LLM... files=%d", len(context.parsed_diff))
             raw = await llm_client.chat(messages, model=None, temperature=0.1)
             parsed = try_parse_json(raw)
             findings = [
@@ -39,14 +40,16 @@ async def run_async(context: AgentContext) -> AgentFindingsResult:
                 for f in parsed.get("findings", [])
                 if isinstance(f, dict)
             ]
+            logger.info("[PERF_AGENT] LLM OK | findings=%d", len(findings))
             return AgentFindingsResult(
                 agent="performance_agent",
                 findings=findings,
                 summary=f"Performance agent found {len(findings)} issues.",
             )
         except (LLMClientError, Exception) as exc:
-            logger.warning("Performance agent LLM call failed, using fallback: %s", exc)
+            logger.warning("[PERF_AGENT] LLM failed, fallback to rules | %s: %s", type(exc).__name__, exc)
 
+    logger.info("[PERF_AGENT] Using sync fallback (rules)")
     return run(context)
 
 
@@ -70,6 +73,7 @@ def run(context: AgentContext) -> AgentFindingsResult:
                     suggestion="Consider breaking large changes into smaller PRs for better review.",
                 )
             )
+    logger.info("[PERF_AGENT] Fallback findings=%d", len(findings))
     return AgentFindingsResult(
         agent="performance_agent",
         findings=findings,

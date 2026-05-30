@@ -27,3 +27,7 @@ Thumbs.db
 
 # Logs
 *.log
+ui/
+.playwright-mcp/
+.claude
+docs/review-pipeline-optimization.md

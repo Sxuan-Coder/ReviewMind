@@ -7,6 +7,7 @@ create_job 采用 async fire-and-forget 模式：
 """
 
 import asyncio
+import logging
 from uuid import uuid4
 
 from fastapi import HTTPException, status
@@ -33,6 +34,8 @@ from app.services.review_job_store import (
 )
 from app.services.review_pipeline import ReviewPipeline
 from app.services.review_task_runner import ReviewTaskRunner
+
+logger = logging.getLogger(__name__)
 
 
 class ReviewJobService:
@@ -95,8 +98,15 @@ class ReviewJobService:
         report: ReviewReport | None = None
         if job.report is not None:
             report = job.report
+            logger.info("[SERVICE] get_job_detail | job=%s source=job.report findings=%d status=%s",
+                        job_id, len(report.findings) if report.findings else 0, job.status)
         elif job.status == ReviewJobStatus.completed and job.pipeline_result:
             report = _build_report_from_pipeline(job)
+            logger.info("[SERVICE] get_job_detail | job=%s source=_build_report_from_pipeline (fallback) findings=%d",
+                        job_id, len(report.findings) if report.findings else 0)
+        else:
+            logger.info("[SERVICE] get_job_detail | job=%s source=no_report status=%s pipeline_result=%s",
+                        job_id, job.status, "present" if job.pipeline_result else "None")
 
         return ReviewJobDetailResponse(
             job_id=job.job_id,
@@ -197,12 +207,17 @@ def _build_report_from_pipeline(job: ReviewJob) -> ReviewReport:
     pipe = job.pipeline_result or {}
     filtered = pipe.get("filtered_files", {})
     included = filtered.get("included_files", []) if isinstance(filtered, dict) else []
+    logger.info("[SERVICE] _build_report_from_pipeline | job=%s included_files=%d",
+                job.job_id, len(included))
     changed_files = [
         ChangedFile(
             filename=f.get("filename", ""),
             status=f.get("status", ""),
             additions=f.get("additions", 0),
             deletions=f.get("deletions", 0),
+            changes=f.get("changes", f.get("additions", 0) + f.get("deletions", 0)),
+            patch=f.get("patch"),
+            risk_count=0,
         )
         for f in included
         if isinstance(f, dict)

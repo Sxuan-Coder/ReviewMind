@@ -2,20 +2,24 @@
 
 from app.schemas.agents import AgentContext
 
-SUMMARY_SYSTEM = """You are a code review summary agent. Analyze the given PR diff and produce a concise summary.
-Return JSON with keys: summary (string)."""
+SUMMARY_SYSTEM = """你是一个代码审查摘要 Agent。请分析给定的 PR diff，生成一段简洁的变更摘要。
+返回 JSON，包含键：summary（字符串）。
+重要：summary 字段必须使用简体中文输出。"""
 
-SECURITY_SYSTEM = """You are a security-focused code review agent. Analyze the given PR diff for security issues.
-Look for: SQL injection, XSS, hardcoded secrets, insecure crypto, path traversal, command injection, SSRF, insecure deserialization.
-Return JSON with key "findings", each finding has: id, agent, file, line, level (CRITICAL/HIGH/MEDIUM/LOW/INFO), type, confidence (0-1), description, suggestion."""
+SECURITY_SYSTEM = """你是一个专注安全的代码审查 Agent。请分析给定的 PR diff 是否存在安全问题。
+重点关注：SQL 注入、XSS、硬编码密钥、不安全的加密、路径穿越、命令注入、SSRF、不安全的反序列化。
+返回 JSON，包含键 "findings"，每个 finding 含字段：id, agent, file, line, level (CRITICAL/HIGH/MEDIUM/LOW/INFO), type, confidence (0-1), description, suggestion。
+重要：保持上述 JSON 键名与 level 枚举值（英文）不变；description 与 suggestion 字段必须使用简体中文输出。"""
 
-PERFORMANCE_SYSTEM = """You are a performance-focused code review agent. Analyze the given PR diff for performance issues.
-Look for: N+1 queries, missing indexes, memory leaks, unnecessary allocations, blocking I/O, missing caching, large payloads.
-Return JSON with key "findings", each finding has: id, agent, file, line, level (CRITICAL/HIGH/MEDIUM/LOW/INFO), type, confidence (0-1), description, suggestion."""
+PERFORMANCE_SYSTEM = """你是一个专注性能的代码审查 Agent。请分析给定的 PR diff 是否存在性能问题。
+重点关注：N+1 查询、缺失索引、内存泄漏、不必要的内存分配、阻塞式 I/O、缺失缓存、过大的负载。
+返回 JSON，包含键 "findings"，每个 finding 含字段：id, agent, file, line, level (CRITICAL/HIGH/MEDIUM/LOW/INFO), type, confidence (0-1), description, suggestion。
+重要：保持上述 JSON 键名与 level 枚举值（英文）不变；description 与 suggestion 字段必须使用简体中文输出。"""
 
-TEST_SYSTEM = """You are a test quality review agent. Analyze the given PR diff for test coverage and quality.
-Look for: missing test coverage, flaky test patterns, test isolation issues, missing edge cases.
-Return JSON with key "findings", each finding has: id, agent, file, line, level (CRITICAL/HIGH/MEDIUM/LOW/INFO), type, confidence (0-1), description, suggestion."""
+TEST_SYSTEM = """你是一个专注测试质量的代码审查 Agent。请分析给定的 PR diff 的测试覆盖与测试质量。
+重点关注：缺失测试覆盖、不稳定（flaky）的测试模式、测试隔离问题、缺失的边界用例。
+返回 JSON，包含键 "findings"，每个 finding 含字段：id, agent, file, line, level (CRITICAL/HIGH/MEDIUM/LOW/INFO), type, confidence (0-1), description, suggestion。
+重要：保持上述 JSON 键名与 level 枚举值（英文）不变；description 与 suggestion 字段必须使用简体中文输出。"""
 
 
 def build_user_prompt(context: AgentContext) -> str:

@@ -10,21 +10,21 @@ def generate_report(
     findings = risk.findings
     risk_level = risk.risk_level
 
-    comment_lines = ["## AI Review Summary", ""]
+    comment_lines = ["## AI 审查摘要", ""]
     comment_lines.append(summary_text)
     comment_lines.append("")
-    comment_lines.append(f"**Risk Level:** {risk_level}")
-    comment_lines.append(f"**Total Findings:** {len(findings)}")
+    comment_lines.append(f"**风险等级：** {risk_level}")
+    comment_lines.append(f"**风险发现数：** {len(findings)}")
     comment_lines.append("")
 
     if findings:
-        comment_lines.append("### Key Findings")
+        comment_lines.append("### 主要发现")
         for finding in findings[:5]:
             comment_lines.append(f"- [{finding.level}] {finding.description}")
         if len(findings) > 5:
-            comment_lines.append(f"- ... and {len(findings) - 5} more")
+            comment_lines.append(f"- ……还有 {len(findings) - 5} 项")
     else:
-        comment_lines.append("No significant findings detected.")
+        comment_lines.append("未发现明显问题。")
 
     return ReviewReportOutput(
         summary=summary_text,
