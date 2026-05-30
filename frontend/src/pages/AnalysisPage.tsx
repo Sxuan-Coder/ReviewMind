@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Loader2, Clock, AlertTriangle, Wifi, XCircle, CheckCircle2, Ban, ArrowLeft } from 'lucide-react';
+import { Loader2, Clock, AlertTriangle, Wifi, XCircle, CheckCircle2, Ban, ArrowLeft, FileText } from 'lucide-react';
 import { useReviewStream } from '../hooks/useReviewStream';
 import { useReviewStore } from '../store/reviewStore';
 import { getJobDetail, cancelJob as cancelJobApi } from '../services/reviewApi';
@@ -47,10 +47,13 @@ export function AnalysisPage() {
         try {
           const detail = await getJobDetail(jobId, useMock);
           store.setDetail(detail);
-        } catch {
-          // ignore
+          navigate(`/report/${jobId}`);
+        } catch (err) {
+          console.error('获取报告失败:', err);
+          store.setJobStatus('failed');
+          store.setSSEStatus('error');
+          // 不跳转，留在当前页面显示错误
         }
-        navigate(`/report/${jobId}`);
       };
       const t = setTimeout(fetchAndGo, 800);
       return () => clearTimeout(t);
@@ -214,6 +217,30 @@ export function AnalysisPage() {
             </div>
           )}
 
+          {/* 实时文件列表 */}
+          {store.fileList.length > 0 && (
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="rounded-xl border border-zinc-800/60 bg-zinc-900/40 p-5"
+            >
+              <h3 className="text-sm font-semibold text-zinc-200 mb-3">
+                变更文件 ({store.fileList.length})
+              </h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-64 overflow-y-auto">
+                {store.fileList.map((filename) => (
+                  <div
+                    key={filename}
+                    className="flex items-center gap-2 px-3 py-1.5 rounded bg-zinc-950/40 border border-zinc-800/30 text-xs font-mono text-zinc-400"
+                  >
+                    <FileText className="size-3 text-zinc-600 shrink-0" />
+                    <span className="truncate">{filename}</span>
+                  </div>
+                ))}
+              </div>
+            </motion.div>
+          )}
+
           <AnimatePresence>
             {isDone && (
               <motion.div
@@ -262,8 +289,33 @@ export function AnalysisPage() {
           {store.sseStatus === 'error' && (
             <div className="rounded-xl border border-red-500/20 bg-red-950/10 p-5 text-center">
               <XCircle className="size-8 text-red-400 mx-auto mb-2" />
-              <p className="text-red-400 font-bold">连接异常</p>
-              <p className="text-sm text-zinc-500 mt-1">SSE 连接中断，请刷新页面重试</p>
+              <p className="text-red-400 font-bold">SSE 连接异常</p>
+              <p className="text-sm text-zinc-500 mt-1">
+                无法实时获取分析进度，可能原因：
+              </p>
+              <ul className="text-xs text-zinc-600 mt-2 space-y-1 text-left max-w-xs mx-auto">
+                <li>• 后端服务未启动或不可达</li>
+                <li>• 网络连接不稳定</li>
+                <li>• API 配置信息缺失（检查 GITHUB_TOKEN / LLM_API_KEY）</li>
+              </ul>
+              <div className="flex items-center justify-center gap-3 mt-4">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => window.location.reload()}
+                  className="border-zinc-800/60 bg-zinc-900/40 text-zinc-400 hover:text-zinc-200"
+                >
+                  刷新页面
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => navigate('/')}
+                  className="border-zinc-800/60 bg-zinc-900/40 text-zinc-400 hover:text-zinc-200"
+                >
+                  <ArrowLeft className="size-3" /> 返回首页
+                </Button>
+              </div>
             </div>
           )}
         </div>

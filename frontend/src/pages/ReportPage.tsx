@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Loader2, ExternalLink, ArrowLeft, Code, FileText, Shield, Diff } from 'lucide-react';
+import { Loader2, ExternalLink, ArrowLeft, Code, FileText, Shield, Diff, AlertTriangle, XCircle } from 'lucide-react';
 import { useReviewStore } from '../store/reviewStore';
 import { getJobDetail } from '../services/reviewApi';
 import { RiskSummary } from '../components/RiskSummary';
@@ -109,12 +109,30 @@ export function ReportPage() {
   }
 
   if (error || !detail) {
+    const isNotFound = error?.includes('not found') || error?.includes('404');
     return (
       <div className="app-shell">
         <NavHeader />
         <Card className="report-card py-0 gap-0">
-          <CardContent className="p-12 text-center">
-            <p className="text-red-400 text-lg mb-4">{error || '报告未找到'}</p>
+          <CardContent className="p-12 text-center space-y-4">
+            {isNotFound ? (
+              <>
+                <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-amber-950/30 border border-amber-500/20 mb-2">
+                  <AlertTriangle className="size-6 text-amber-400" />
+                </div>
+                <p className="text-amber-400 text-lg font-bold">任务已过期</p>
+                <p className="text-sm text-zinc-500 max-w-md mx-auto">
+                  该 Review 任务的数据已从内存中清除（通常因后端服务重启导致）。
+                  <br />
+                  请重新发起一次分析。
+                </p>
+              </>
+            ) : (
+              <>
+                <XCircle className="size-10 text-red-400 mx-auto mb-2" />
+                <p className="text-red-400 text-lg">{error || '报告未找到'}</p>
+              </>
+            )}
             <Button
               variant="outline"
               onClick={() => navigate('/')}
