@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Loader2, ExternalLink, ArrowLeft, Code, FileText, Shield, Diff, AlertTriangle, XCircle } from 'lucide-react';
 import { useReviewStore } from '../store/reviewStore';
-import { getJobDetail } from '../services/reviewApi';
+import { getJobDetail, getPrPreviewFiles } from '../services/reviewApi';
 import { RiskSummary } from '../components/RiskSummary';
 import { FindingCard } from '../components/FindingCard';
 import { FileChangeList } from '../components/FileChangeList';
@@ -19,7 +19,6 @@ import { cn } from '../lib/utils';
 export function ReportPage() {
   const { jobId } = useParams<{ jobId: string }>();
   const navigate = useNavigate();
-  const useMock = useReviewStore((s) => s.useMock);
   const storeDetail = useReviewStore((s) => s.detail);
 
   const [detail, setDetail] = useState<JobDetailResponse | null>(storeDetail);
@@ -29,6 +28,8 @@ export function ReportPage() {
   const [expandedFindings, setExpandedFindings] = useState<Set<string>>(new Set());
 
   const [diffFile, setDiffFile] = useState<ChangedFile | null>(null);
+  const [diffPatchLoading, setDiffPatchLoading] = useState(false);
+  const [diffPatchError, setDiffPatchError] = useState<string | null>(null);
   const [highlightLine, setHighlightLine] = useState<number | null>(null);
   const diffContainerRef = useRef<HTMLDivElement>(null);
 
@@ -53,7 +54,7 @@ export function ReportPage() {
       return;
     }
 
-    getJobDetail(jobId, useMock)
+    getJobDetail(jobId)
       .then((data) => {
         setDetail(data);
         setLoading(false);
@@ -63,7 +64,7 @@ export function ReportPage() {
         setError(err instanceof Error ? err.message : '加载报告失败');
         setLoading(false);
       });
-  }, [jobId, useMock, detail]);
+  }, [jobId, detail]);
 
   function toggleFinding(id: string) {
     setExpandedFindings((prev) => {
@@ -81,7 +82,13 @@ export function ReportPage() {
     setActiveTab('diff');
     setTimeout(() => {
       const el = diffContainerRef.current?.querySelector(`[data-line="${finding.line}"]`);
-      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const scroller = el?.closest('[data-diff-scroll]') as HTMLElement | null;
+      if (el instanceof HTMLElement && scroller) {
+        scroller.scrollTop = Math.max(
+          el.offsetTop - scroller.clientHeight / 2 + el.clientHeight / 2,
+          0,
+        );
+      }
     }, 200);
   }
 
@@ -89,6 +96,58 @@ export function ReportPage() {
     () => detail?.report?.changed_files?.filter((f) => f.patch || f.old_code || f.new_code) ?? [],
     [detail],
   );
+
+  useEffect(() => {
+    if (!detail?.pr?.html_url || !detail.report?.changed_files.length) return;
+    if (detail.report.changed_files.some((file) => file.patch || file.old_code || file.new_code)) return;
+
+    let cancelled = false;
+    setDiffPatchLoading(true);
+    setDiffPatchError(null);
+
+    getPrPreviewFiles(detail.pr.html_url)
+      .then((files) => {
+        if (cancelled) return;
+        const patchByFilename = new Map(files.map((file) => [file.filename, file.patch]));
+        setDetail((current) => {
+          if (!current?.report) return current;
+          return {
+            ...current,
+            report: {
+              ...current.report,
+              changed_files: current.report.changed_files.map((file) => ({
+                ...file,
+                patch: file.patch ?? patchByFilename.get(file.filename) ?? undefined,
+              })),
+            },
+          };
+        });
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setDiffPatchError(err instanceof Error ? err.message : 'Diff 数据补齐失败');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setDiffPatchLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [detail?.pr?.html_url, detail?.report?.changed_files]);
+
+  useEffect(() => {
+    if (filesWithDiff.length === 0) {
+      if (diffFile) setDiffFile(null);
+      return;
+    }
+
+    const selectedExists = filesWithDiff.some((f) => f.filename === diffFile?.filename);
+    if (!diffFile || !selectedExists) {
+      setDiffFile(filesWithDiff[0]);
+    }
+  }, [diffFile, filesWithDiff]);
 
   function renderDiffView(file: ChangedFile | null) {
     if (!file) {
@@ -191,7 +250,7 @@ export function ReportPage() {
       )}
 
       <div className="dashboard-grid">
-        <div className="md:col-span-1">
+        <div className="min-w-0">
           <RiskSummary riskLevel={report?.risk_level} stats={report?.stats} />
 
           <Card className="timeline-card mt-4 py-0 gap-0">
@@ -229,9 +288,9 @@ export function ReportPage() {
           </Card>
         </div>
 
-        <div className="md:col-span-3 report-card">
-          <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList variant="line" className="border-b border-zinc-800/40 w-full justify-start h-auto p-0 mb-6 gap-0">
+        <div className="report-card min-w-0">
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col">
+            <TabsList variant="line" className="border-b border-zinc-800/40 w-full max-w-full justify-start h-auto p-0 mb-6 gap-0 overflow-x-auto">
               {[
                 { key: 'overview', label: '概览', icon: FileText },
                 { key: 'findings', label: '风险发现', icon: Shield, count: report?.findings?.length ?? 0 },
@@ -358,7 +417,13 @@ export function ReportPage() {
             </TabsContent>
 
             <TabsContent value="diff" className="mt-0">
-              {filesWithDiff.length > 0 && (
+              {diffPatchLoading && (
+                <p className="text-xs text-zinc-500 mb-3">正在补齐 Diff 数据...</p>
+              )}
+              {diffPatchError && (
+                <p className="text-xs text-amber-400 mb-3">{diffPatchError}</p>
+              )}
+              {filesWithDiff.length > 1 && (
                 <div className="flex items-center gap-2 mb-4 overflow-x-auto pb-2">
                   {filesWithDiff.map((f) => (
                     <Button
@@ -406,7 +471,7 @@ function renderSideBySideDiff(oldCode: string, newCode: string, filename: string
   const diffRows = computeLineDiff(oldLines, newLines);
 
   return (
-    <div className="overflow-auto max-h-[70vh]">
+    <div data-diff-scroll className="overflow-auto max-h-[70vh]">
       <table className="w-full text-xs font-mono border-collapse">
         <thead>
           <tr className="bg-zinc-900/80 text-zinc-500 sticky top-0 z-10">
@@ -463,7 +528,7 @@ function renderSideBySideDiff(oldCode: string, newCode: string, filename: string
 function renderPatchView(patch: string) {
   const lines = patch.split('\n');
   return (
-    <div className="overflow-auto max-h-[70vh] p-3 font-mono text-xs leading-5">
+    <div data-diff-scroll className="overflow-auto max-h-[70vh] p-3 font-mono text-xs leading-5">
       {lines.map((line, i) => {
         const isAdd = line.startsWith('+') && !line.startsWith('+++');
         const isDel = line.startsWith('-') && !line.startsWith('---');

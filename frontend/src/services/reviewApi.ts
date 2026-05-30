@@ -5,13 +5,6 @@ import type {
   JobListResponse,
   PullRequestInfo,
 } from '../types';
-import {
-  mockCreateJobResponse,
-  mockJobCompleted,
-  mockJobList,
-  mockPrPreview,
-  simulateDelay,
-} from '../mock/data';
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api/v1';
 
@@ -34,13 +27,7 @@ export interface CreateJobParams {
 
 export async function createReviewJob(
   params: CreateJobParams,
-  useMock = false,
 ): Promise<CreateJobResponse> {
-  if (useMock) {
-    await simulateDelay(500);
-    return { ...mockCreateJobResponse, job_id: `rev_${Date.now().toString(36)}` };
-  }
-
   const response = await fetch(`${apiBaseUrl}/review/jobs`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -56,15 +43,7 @@ export async function createReviewJob(
   return result.data;
 }
 
-export async function getJobDetail(
-  jobId: string,
-  useMock = false,
-): Promise<JobDetailResponse> {
-  if (useMock) {
-    await simulateDelay(300);
-    return { ...mockJobCompleted, job_id: jobId };
-  }
-
+export async function getJobDetail(jobId: string): Promise<JobDetailResponse> {
   const response = await fetch(`${apiBaseUrl}/review/jobs/${jobId}`);
   if (!response.ok) {
     if (response.status === 404) {
@@ -81,13 +60,7 @@ export async function getJobDetail(
 export async function getJobList(
   page = 1,
   pageSize = 10,
-  useMock = false,
 ): Promise<JobListResponse> {
-  if (useMock) {
-    await simulateDelay(200);
-    return mockJobList;
-  }
-
   const response = await fetch(
     `${apiBaseUrl}/review/jobs?page=${page}&page_size=${pageSize}`,
   );
@@ -101,13 +74,7 @@ export async function getJobList(
 
 export async function cancelJob(
   jobId: string,
-  useMock = false,
 ): Promise<{ job_id: string; status: string }> {
-  if (useMock) {
-    await simulateDelay(200);
-    return { job_id: jobId, status: 'cancelled' };
-  }
-
   const response = await fetch(`${apiBaseUrl}/review/jobs/${jobId}/cancel`, {
     method: 'POST',
   });
@@ -122,18 +89,7 @@ export async function cancelJob(
 // ============ GitHub Utils ============
 export async function parsePrUrl(
   prUrl: string,
-  useMock = false,
 ): Promise<{ owner: string; repo: string; pull_number: number; html_url: string }> {
-  if (useMock) {
-    await simulateDelay(200);
-    return {
-      owner: 'octocat',
-      repo: 'hello-world',
-      pull_number: 42,
-      html_url: prUrl,
-    };
-  }
-
   const response = await fetch(`${apiBaseUrl}/github/parse-pr-url`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -147,15 +103,7 @@ export async function parsePrUrl(
   return result.data;
 }
 
-export async function getPrPreview(
-  prUrl: string,
-  useMock = false,
-): Promise<PullRequestInfo> {
-  if (useMock) {
-    await simulateDelay(500);
-    return mockPrPreview;
-  }
-
+export async function getPrPreview(prUrl: string): Promise<PullRequestInfo> {
   const response = await fetch(`${apiBaseUrl}/github/pr-preview`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -165,6 +113,22 @@ export async function getPrPreview(
     throw new Error('PR 预览获取失败');
   }
 
-  const result: ApiResponse<PullRequestInfo> = await response.json();
-  return result.data;
+  const result: ApiResponse<{ pr: PullRequestInfo }> = await response.json();
+  return result.data.pr;
+}
+
+export async function getPrPreviewFiles(
+  prUrl: string,
+): Promise<{ filename: string; patch?: string | null }[]> {
+  const response = await fetch(`${apiBaseUrl}/github/pr-preview`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pr_url: prUrl }),
+  });
+  if (!response.ok) {
+    throw new Error('PR 文件预览获取失败');
+  }
+
+  const result = await response.json();
+  return result.data?.files ?? [];
 }

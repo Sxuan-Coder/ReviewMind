@@ -6,13 +6,11 @@ import { createReviewJob, getJobList, getPrPreview, parsePrUrl, getHealth } from
 import { useReviewStore } from '../store/reviewStore';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
 import type { PullRequestInfo, JobListItem } from '../types';
 
 export function HomePage() {
   const [prUrl, setPrUrl] = useState('');
-  const [useMock, setUseMock] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -26,7 +24,6 @@ export function HomePage() {
 
   const navigate = useNavigate();
   const storeSetJob = useReviewStore((s) => s.setJob);
-  const storeSetUseMock = useReviewStore((s) => s.setUseMock);
 
   useEffect(() => {
     getHealth()
@@ -50,15 +47,15 @@ export function HomePage() {
     }
     setPreviewLoading(true);
     try {
-      await parsePrUrl(prUrl.trim(), useMock);
-      const info = await getPrPreview(prUrl.trim(), useMock);
+      await parsePrUrl(prUrl.trim());
+      const info = await getPrPreview(prUrl.trim());
       setPreview(info);
     } catch (err) {
       setError(err instanceof Error ? err.message : '获取 PR 信息失败');
     } finally {
       setPreviewLoading(false);
     }
-  }, [prUrl, useMock]);
+  }, [prUrl]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -71,8 +68,7 @@ export function HomePage() {
 
     setLoading(true);
     try {
-      storeSetUseMock(useMock);
-      const job = await createReviewJob({ pr_url: prUrl.trim() }, useMock);
+      const job = await createReviewJob({ pr_url: prUrl.trim() });
       storeSetJob(job);
       navigate(`/analysis/${job.job_id}`);
     } catch (err) {
@@ -85,14 +81,14 @@ export function HomePage() {
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true);
     try {
-      const res = await getJobList(1, 5, useMock);
+      const res = await getJobList(1, 5);
       setHistory(res.items);
     } catch {
       // silent
     } finally {
       setHistoryLoading(false);
     }
-  }, [useMock]);
+  }, []);
 
   useEffect(() => {
     setPreview(null);
@@ -114,7 +110,7 @@ export function HomePage() {
                 className={`inline-block w-2 h-2 rounded-full ${backendOnline ? 'bg-zinc-400 shadow-[0_0_6px_rgba(161,161,170,0.4)]' : 'bg-red-400'}`}
               />
               <span className="text-xs text-muted-foreground">
-                {backendOnline ? '后端服务正常' : useMock ? 'Mock 模式（无需后端）' : '后端不可用'}
+                {backendOnline ? '后端服务正常' : '后端不可用'}
               </span>
             </div>
           )}
@@ -137,14 +133,6 @@ export function HomePage() {
               value={prUrl}
               className="flex-1 min-w-0 h-12 rounded-[10px] border-zinc-800/60 bg-zinc-950/70 text-foreground placeholder:text-muted-foreground/50 px-5 text-sm"
             />
-            <label className="flex items-center space-x-2 text-sm bg-zinc-900/60 px-3 py-2 rounded-lg border border-zinc-800/60 cursor-pointer">
-              <Checkbox
-                checked={useMock}
-                onCheckedChange={(checked) => setUseMock(checked === true)}
-                className="border-zinc-600/40"
-              />
-              <span className="text-muted-foreground text-xs whitespace-nowrap">Mock 模式</span>
-            </label>
             <Button
               disabled={loading || previewLoading}
               type="submit"
