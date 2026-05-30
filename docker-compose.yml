@@ -1,24 +1,43 @@
 services:
   backend:
-    image: python:3.12-slim
-    working_dir: /app/backend
-    command: sh -c "pip install -r requirements.txt && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
     ports:
       - "8000:8000"
-    volumes:
-      - .:/app
     env_file:
       - ./backend/.env.example
+    # PostgreSQL 和 Redis 启用后取消注释
+    # depends_on:
+    #   - postgres
+    #   - redis
 
   frontend:
-    image: node:22-alpine
-    working_dir: /app/frontend
-    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
     ports:
-      - "5173:5173"
-    volumes:
-      - .:/app
-    env_file:
-      - ./frontend/.env.example
+      - "80:80"
     depends_on:
       - backend
+
+  # PostgreSQL 持久化 — 启用后取消注释
+  # postgres:
+  #   image: postgres:16-alpine
+  #   environment:
+  #     POSTGRES_DB: reviewmind
+  #     POSTGRES_USER: reviewmind
+  #     POSTGRES_PASSWORD: reviewmind
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - pgdata:/var/lib/postgresql/data
+
+  # Redis 缓存 — 启用后取消注释
+  # redis:
+  #   image: redis:7-alpine
+  #   ports:
+  #     - "6379:6379"
+
+# volumes:
+#   pgdata:
