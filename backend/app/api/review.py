@@ -18,7 +18,7 @@ from app.services.github_client import GitHubClient
 from app.services.github_url_parser import GitHubPullRequestUrlError, parse_github_pr_url
 from app.models.review_job import _QUEUE_DONE
 from app.services.review_job_service import review_job_service
-from app.services.review_job_store import ReviewJobNotFoundError, review_job_store
+from app.services.review_job_store import ReviewJobNotFoundError, event_queue_registry, review_job_store
 
 review_router = APIRouter(prefix="/review", tags=["review"])
 github_router = APIRouter(prefix="/github", tags=["github"])
@@ -44,25 +44,25 @@ async def create_review_job(request: CreateReviewJobRequest) -> ApiResponse[Crea
 
 @review_router.get("/jobs", response_model=ApiResponse[JobListResponse])
 async def list_review_jobs(page: int = 1, page_size: int = 10) -> ApiResponse[JobListResponse]:
-    return success_response(review_job_service.get_job_list(page, page_size))
+    return success_response(await review_job_service.get_job_list(page, page_size))
 
 
 @review_router.get("/jobs/{job_id}", response_model=ApiResponse[ReviewJobDetailResponse])
 async def get_review_job_detail(job_id: str) -> ApiResponse[ReviewJobDetailResponse]:
-    detail = review_job_service.get_job_detail(job_id)
+    detail = await review_job_service.get_job_detail(job_id)
     await _hydrate_missing_report_patches(detail)
     return success_response(detail)
 
 
 @review_router.get("/jobs/{job_id}/state", response_model=ReviewJobSnapshot)
 async def get_review_job_state(job_id: str) -> ReviewJobSnapshot:
-    return review_job_service.get_job(job_id)
+    return await review_job_service.get_job(job_id)
 
 
 @review_router.post("/jobs/{job_id}/cancel", response_model=ApiResponse[ReviewJobDetailResponse])
 async def cancel_review_job(job_id: str) -> ApiResponse[ReviewJobDetailResponse]:
     return success_response(
-        review_job_service.cancel_job(job_id),
+        await review_job_service.cancel_job(job_id),
         message="review job cancelled",
     )
 
@@ -75,7 +75,7 @@ async def stream_review_progress(job_id: str) -> StreamingResponse:
     支持心跳保活和优雅断开。
     """
     try:
-        job = review_job_store.get(job_id)  # 获取原始 ReviewJob（含 event_queue）
+        job = await review_job_store.get(job_id)
     except ReviewJobNotFoundError:
         # 返回 SSE 格式的错误事件，而不是 HTTP 404
         async def error_stream() -> AsyncIterator[str]:
@@ -86,7 +86,7 @@ async def stream_review_progress(job_id: str) -> StreamingResponse:
 
         return StreamingResponse(error_stream(), media_type="text/event-stream")
 
-    event_queue = job.event_queue
+    event_queue = event_queue_registry.get(job_id)
 
     async def event_stream() -> AsyncIterator[str]:
         # 先发送已收集的历史事件
@@ -96,8 +96,8 @@ async def stream_review_progress(job_id: str) -> StreamingResponse:
             data = _format_event_data(event_type, event)
             yield _format_sse(event_type, data)
 
-        # 如果任务已经结束，直接发送 done 并退出
-        if job.status in {"completed", "failed", "cancelled"}:
+        # 如果任务已经结束或没有事件队列，直接发送 done 并退出
+        if job.status in {"completed", "failed", "cancelled"} or event_queue is None:
             done_data = _build_done_data(job_id, job.status, job.error_message)
             yield _format_sse("done", done_data)
             return
@@ -135,7 +135,7 @@ async def stream_review_progress(job_id: str) -> StreamingResponse:
         # 循环结束 → 发送 done
         # 重新读取 job 状态（可能已被更新）
         try:
-            current_job = review_job_store.get(job_id)
+            current_job = await review_job_store.get(job_id)
             final_status = current_job.status
             error_msg = current_job.error_message
         except ReviewJobNotFoundError:
