@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Loader2, ExternalLink, ArrowLeft, Code, FileText, Shield, Diff, AlertTriangle, XCircle } from 'lucide-react';
+import { ExternalLink, ArrowLeft, Code, FileText, Shield, Diff, AlertTriangle, XCircle } from 'lucide-react';
 import { useReviewStore } from '../store/reviewStore';
 import { getJobDetail, getPrPreviewFiles } from '../services/reviewApi';
 import { RiskSummary } from '../components/RiskSummary';
@@ -9,12 +9,61 @@ import { FindingCard } from '../components/FindingCard';
 import { FileChangeList } from '../components/FileChangeList';
 import { ReviewCommentBox } from '../components/ReviewCommentBox';
 import { NavHeader } from '../components/NavHeader';
+import { Skeleton } from '@/components/ui/skeleton';
+import { NavHeader } from '../components/NavHeader';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import type { ChangedFile, Finding, JobDetailResponse } from '../types';
 import { cn } from '../lib/utils';
+
+// 报告页骨架屏：加载时展示占位，保持布局结构一致
+function ReportSkeleton() {
+  return (
+    <div className="app-shell">
+      <div className="report-card mb-5 p-5 space-y-3">
+        <Skeleton className="h-3 w-48" />
+        <Skeleton className="h-6 w-3/4" />
+        <div className="flex gap-4">
+          <Skeleton className="h-3 w-24" />
+          <Skeleton className="h-3 w-16" />
+          <Skeleton className="h-3 w-20" />
+        </div>
+      </div>
+      <div className="dashboard-grid">
+        <div className="space-y-4">
+          <div className="report-card p-5 space-y-3">
+            <Skeleton className="h-3 w-20" />
+            <div className="grid grid-cols-3 gap-3">
+              <Skeleton className="h-16 rounded-lg" />
+              <Skeleton className="h-16 rounded-lg" />
+              <Skeleton className="h-16 rounded-lg" />
+            </div>
+          </div>
+          <div className="timeline-card p-6 space-y-2">
+            <Skeleton className="h-3 w-20" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-2/3" />
+          </div>
+        </div>
+        <div className="report-card p-6 space-y-6">
+          <div className="flex gap-4 border-b border-zinc-800/40 pb-4">
+            <Skeleton className="h-8 w-16" />
+            <Skeleton className="h-8 w-20" />
+            <Skeleton className="h-8 w-20" />
+          </div>
+          <div className="space-y-3">
+            <Skeleton className="h-3 w-16" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-5/6" />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function ReportPage() {
   const { jobId } = useParams<{ jobId: string }>();
@@ -169,10 +218,7 @@ export function ReportPage() {
     return (
       <div className="app-shell">
         <NavHeader />
-        <div className="flex flex-col items-center justify-center p-24 text-zinc-600">
-          <Loader2 className="size-10 text-zinc-700 animate-spin mb-4" />
-          <p>正在加载报告...</p>
-        </div>
+        <ReportSkeleton />
       </div>
     );
   }
