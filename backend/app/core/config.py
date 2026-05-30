@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     llm_mock_mode: bool = True
 
     database_url: str = "sqlite+aiosqlite:///./reviewmind.db"
+    redis_url: str = "redis://localhost:6379/0"
 
     model_config = SettingsConfigDict(
         env_file=".env",

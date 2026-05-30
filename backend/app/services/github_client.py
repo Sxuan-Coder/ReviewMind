@@ -2,6 +2,7 @@ from typing import Any
 
 import httpx
 
+from app.core.cache import redis_cache
 from app.core.config import settings
 from app.schemas.github import (
     GitHubBranchRef,
@@ -9,6 +10,10 @@ from app.schemas.github import (
     GitHubPullRequestInfo,
     GitHubPullRequestRef,
 )
+
+# 缓存 TTL（秒）
+_CACHE_TTL_PR_INFO = 300       # 5 分钟
+_CACHE_TTL_PR_FILES = 300      # 5 分钟
 
 
 class GitHubClientError(RuntimeError):
@@ -31,8 +36,13 @@ class GitHubClient:
         self.client = client
 
     async def fetch_pull_request(self, pr_ref: GitHubPullRequestRef) -> GitHubPullRequestInfo:
+        cache_key = f"github:pr:{pr_ref.owner}/{pr_ref.repo}/{pr_ref.pull_number}"
+        cached = await redis_cache.get(cache_key)
+        if cached is not None:
+            return GitHubPullRequestInfo.model_validate(cached)
+
         payload = await self._get_json(f"/repos/{pr_ref.owner}/{pr_ref.repo}/pulls/{pr_ref.pull_number}")
-        return GitHubPullRequestInfo(
+        info = GitHubPullRequestInfo(
             owner=pr_ref.owner,
             repo=pr_ref.repo,
             pull_number=pr_ref.pull_number,
@@ -46,13 +56,20 @@ class GitHubClient:
             deletions=int(payload.get("deletions", 0)),
             html_url=str(payload.get("html_url", pr_ref.html_url)),
         )
+        await redis_cache.set(cache_key, info.model_dump(mode="json"), ttl_seconds=_CACHE_TTL_PR_INFO)
+        return info
 
     async def fetch_pull_request_files(self, pr_ref: GitHubPullRequestRef) -> list[GitHubPullRequestFile]:
+        cache_key = f"github:files:{pr_ref.owner}/{pr_ref.repo}/{pr_ref.pull_number}"
+        cached = await redis_cache.get(cache_key)
+        if cached is not None and isinstance(cached, list):
+            return [GitHubPullRequestFile.model_validate(item) for item in cached]
+
         payload = await self._get_json(f"/repos/{pr_ref.owner}/{pr_ref.repo}/pulls/{pr_ref.pull_number}/files")
         if not isinstance(payload, list):
             raise GitHubClientError("GitHub files response is invalid")
 
-        return [
+        files = [
             GitHubPullRequestFile(
                 filename=str(item.get("filename", "")),
                 status=str(item.get("status", "modified")),
@@ -62,6 +79,8 @@ class GitHubClient:
             )
             for item in payload
         ]
+        await redis_cache.set(cache_key, [f.model_dump(mode="json") for f in files], ttl_seconds=_CACHE_TTL_PR_FILES)
+        return files
 
     async def _get_json(self, path: str) -> Any:
         headers = {
