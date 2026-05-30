@@ -177,7 +177,7 @@ export interface ProgressEvent {
 }
 
 export interface ChunkEvent {
-  target: 'summary' | 'report';
+  target: 'summary' | 'report' | 'files';
   content: string;
 }
 
@@ -202,10 +202,11 @@ export interface WarningEvent {
 
 export interface DoneEvent {
   job_id: string;
-  status: 'completed';
+  status: 'completed' | 'failed' | 'cancelled' | 'error';
   report_url: string;
-  total_findings: number;
-  duration_ms: number;
+  total_findings?: number;
+  duration_ms?: number;
+  error_message?: string;
 }
 
 export interface ErrorEvent {

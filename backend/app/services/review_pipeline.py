@@ -1,3 +1,4 @@
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -44,17 +45,29 @@ class ReviewPipeline:
             parsed_diff = [parse_diff_file(file) for file in filtered.included_files]
             self._add_progress(job.job_id, "DIFF_PARSE", 85, "Diff 变更行解析已完成")
 
-            # 构建 changed_files 列表
+            # 构建 changed_files 列表（包含 patch 用于 Diff 视图）
             changed_files = [
                 {
                     "filename": f.filename,
                     "status": f.status,
                     "additions": f.additions,
                     "deletions": f.deletions,
+                    "changes": f.additions + f.deletions,
+                    "patch": f.patch,  # 包含 GitHub Diff patch 数据
                     "risk_count": 0,
                 }
                 for f in filtered.included_files
             ]
+
+            # SSE 推送文件列表供前端实时展示
+            self._store.add_progress_event(
+                job.job_id,
+                {
+                    "type": "chunk",
+                    "target": "files",
+                    "content": json.dumps([cf["filename"] for cf in changed_files], ensure_ascii=False),
+                },
+            )
 
             result = ReviewPipelineResult(
                 pr_info=pr_info.model_dump(mode="json"),
