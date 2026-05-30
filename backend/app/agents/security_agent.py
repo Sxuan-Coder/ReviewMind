@@ -27,10 +27,10 @@ async def run_async(context: AgentContext) -> AgentFindingsResult:
             parsed = try_parse_json(raw)
             findings = [
                 ReviewFinding(
-                    id=f.get("id", f"sec_{uuid4().hex[:8]}"),
+                    id=str(f.get("id") or f"sec_{uuid4().hex[:8]}"),
                     agent="security_agent",
-                    file=f.get("file", "unknown"),
-                    line=f.get("line", 0),
+                    file=f.get("file") or "unknown",
+                    line=int(f.get("line") or 0),
                     level=f.get("level", "INFO"),
                     type=f.get("type", "security_check"),
                     confidence=float(f.get("confidence", 0.5)),
