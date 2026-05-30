@@ -145,3 +145,12 @@ class JobListResponse(BaseModel):
     page: int = 1
     page_size: int = 10
     total: int = 0
+
+
+class PostCommentRequest(BaseModel):
+    comment_body: str | None = Field(default=None, description="自定义评论内容，不传则使用 report.review_comment")
+
+
+class PostCommentResponse(BaseModel):
+    comment_id: int
+    html_url: str

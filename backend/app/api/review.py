@@ -11,10 +11,13 @@ from app.schemas.review import (
     CreateReviewJobRequest,
     CreateReviewJobResponse,
     JobListResponse,
+    PostCommentRequest,
+    PostCommentResponse,
     ReviewJobDetailResponse,
     ReviewJobSnapshot,
 )
 from app.services.github_client import GitHubClient
+from app.services.github_comment import GitHubCommentError, post_pr_comment
 from app.services.github_url_parser import GitHubPullRequestUrlError, parse_github_pr_url
 from app.models.review_job import _QUEUE_DONE
 from app.services.review_job_service import review_job_service
@@ -65,6 +68,32 @@ async def cancel_review_job(job_id: str) -> ApiResponse[ReviewJobDetailResponse]
         await review_job_service.cancel_job(job_id),
         message="review job cancelled",
     )
+
+
+@review_router.post("/jobs/{job_id}/comment", response_model=ApiResponse[PostCommentResponse])
+async def post_review_comment(job_id: str, request: PostCommentRequest | None = None) -> ApiResponse[PostCommentResponse]:
+    """将 Review 结果作为评论发布到 GitHub PR。"""
+    detail = await review_job_service.get_job_detail(job_id)
+    if detail.pr is None:
+        return success_response(None, message="PR info not available for this job", code=40000)
+    if detail.report is None:
+        return success_response(None, message="Review report not available yet", code=40000)
+
+    comment_body = (request.comment_body if request and request.comment_body else None) or detail.report.review_comment
+    if not comment_body:
+        return success_response(None, message="No comment content to post", code=40000)
+
+    try:
+        result = await post_pr_comment(
+            owner=detail.pr.owner,
+            repo=detail.pr.repo,
+            pull_number=detail.pr.number,
+            body=comment_body,
+        )
+    except GitHubCommentError as exc:
+        return success_response(None, message=str(exc), code=50000)
+
+    return success_response(PostCommentResponse(comment_id=result.comment_id, html_url=result.html_url))
 
 
 @review_router.get("/stream/{job_id}")
