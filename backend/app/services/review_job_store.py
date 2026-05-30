@@ -61,11 +61,16 @@ class ReviewJobStore:
         if status == ReviewJobStatus.completed:
             job.mark_completed()
         job.mark_updated()
+
+        # 通知 SSE 流任务已结束
+        if status in {ReviewJobStatus.completed, ReviewJobStatus.failed, ReviewJobStatus.cancelled}:
+            job.signal_done()
         return job
 
     def add_progress_event(self, job_id: str, event: dict[str, object]) -> ReviewJob:
         job = self.get(job_id)
         job.progress_events.append(event)
+        job.push_event(event)  # 推入 SSE 实时队列
         job.mark_updated()
         return job
 
