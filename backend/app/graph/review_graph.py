@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -124,6 +125,20 @@ class ReviewGraph:
 
             state = await self._run_node(node_name, state)
 
+            # 在 Diff 解析完成后推送文件列表（Agent 开始前就让前端看到）
+            if node_name == "parse_diff" and not state.error:
+                included = state.filtered_files.get("included_files", [])
+                file_names = [f.get("filename", "") for f in included if isinstance(f, dict)]
+                if file_names:
+                    self._store.add_progress_event(
+                        job.job_id,
+                        {
+                            "type": "chunk",
+                            "target": "files",
+                            "content": json.dumps(file_names, ensure_ascii=False),
+                        },
+                    )
+
             if state.error and node_name in _CRITICAL_NODES:
                 self._store.update_status(job.job_id, ReviewJobStatus.failed, error_message=state.error)
                 self._add_progress(
@@ -150,23 +165,30 @@ class ReviewGraph:
     async def _run_node(self, node_name: str, state: ReviewGraphState) -> ReviewGraphState:
         gc = self._github_client
         st = self._store
-        dispatch = {
+        # 异步节点（直接 await）
+        async_dispatch: dict[str, Any] = {
             "fetch_pr": lambda s: node_fetch_pr_async(s, gc, st),
             "fetch_files": lambda s: node_fetch_files_async(s, gc, st),
+            "summary_agent": lambda s: node_summary_agent(s, gc, st),
+            "security_agent": lambda s: node_security_agent(s, gc, st),
+            "performance_agent": lambda s: node_performance_agent(s, gc, st),
+            "test_agent": lambda s: node_test_agent(s, gc, st),
+        }
+        # 同步节点（用 _sync 包装）
+        sync_dispatch: dict[str, Any] = {
             "diff_filter": lambda s: _sync(node_diff_filter, s, gc, st),
             "parse_diff": lambda s: _sync(node_parse_diff, s, gc, st),
             "ast_context": lambda s: _sync(node_ast_context, s, gc, st),
-            "summary_agent": lambda s: _sync(node_summary_agent, s, gc, st),
-            "security_agent": lambda s: _sync(node_security_agent, s, gc, st),
-            "performance_agent": lambda s: _sync(node_performance_agent, s, gc, st),
-            "test_agent": lambda s: _sync(node_test_agent, s, gc, st),
             "risk_judge": lambda s: _sync(node_risk_judge, s, gc, st),
             "report_agent": lambda s: _sync(node_report_agent, s, gc, st),
         }
-        handler = dispatch.get(node_name)
-        if handler is None:
-            return state
-        return await handler(state)
+
+        if node_name in async_dispatch:
+            return await async_dispatch[node_name](state)
+        handler = sync_dispatch.get(node_name)
+        if handler is not None:
+            return await handler(state)
+        return state
 
     def _finish(self, job_id: str, state: ReviewGraphState) -> None:
         """将 graph 输出组装为 ReviewReport 并保存到 store。"""
@@ -176,6 +198,8 @@ class ReviewGraph:
                 status=f.get("status", "unknown"),
                 additions=f.get("additions", 0),
                 deletions=f.get("deletions", 0),
+                changes=f.get("additions", 0) + f.get("deletions", 0),
+                patch=f.get("patch"),  # GitHub Diff patch 数据
             )
             for f in state.filtered_files.get("included_files", [])
         ]
@@ -209,7 +233,7 @@ class ReviewGraph:
                 review_comment="## AI Review Summary\n\n基础分析完成。",
             )
 
-        # 更新 stats
+        # 更新 stats（根据真实 findings 统计各级别数量）
         if state.aggregated_risk:
             for f in state.aggregated_risk.findings:
                 level = f.level.upper()
@@ -225,7 +249,7 @@ class ReviewGraph:
                     report.stats.suggestion += 1
 
         self._store.update_status(job_id, ReviewJobStatus.completed, report=report)
-        self._add_progress(job_id, "DONE", 100, "Review Graph 工作流已完成")
+        self._add_progress(job_id, "DONE", 100, "Review 工作流已完成")
 
     def _add_progress(self, job_id: str, step: str, percent: int, message: str, event_type: str = "progress") -> None:
         self._store.add_progress_event(

@@ -1,5 +1,8 @@
 """Review Graph 节点：每个节点读写 ReviewGraphState 的一部分。"""
 
+import asyncio
+from typing import Any, Callable, Coroutine
+
 from app.agents import (
     performance_agent,
     report_agent,
@@ -19,6 +22,36 @@ from app.services.diff_parser import parse_diff_file
 from app.services.github_client import GitHubClient
 from app.services.github_url_parser import parse_github_pr_url
 from app.services.review_job_store import ReviewJobStore
+
+
+def _run_async(coro: Callable[..., Coroutine], *args, **kwargs) -> Any:
+    """在同步上下文中安全地执行异步函数。"""
+    result_holder: list[Any] = []
+    exception_holder: list[Exception] = []
+
+    async def _runner() -> None:
+        try:
+            result_holder.append(await coro(*args, **kwargs))
+        except Exception as exc:
+            exception_holder.append(exc)
+
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    if loop.is_running():
+        # 已在事件循环中，创建 task 并等待
+        import concurrent.futures
+        future = asyncio.run_coroutine_threadsafe(_runner(), loop)
+        future.result(timeout=120)
+    else:
+        loop.run_until_complete(_runner())
+
+    if exception_holder:
+        raise exception_holder[0]
+    return result_holder[0] if result_holder else None
 
 
 def node_fetch_pr(state: ReviewGraphState, github_client: GitHubClient, store: ReviewJobStore) -> ReviewGraphState:
@@ -132,8 +165,8 @@ def node_ast_context(state: ReviewGraphState, _github_client: GitHubClient, _sto
     return state
 
 
-def node_summary_agent(state: ReviewGraphState, _github_client: GitHubClient, _store: ReviewJobStore) -> ReviewGraphState:
-    """节点 6：Summary Agent 生成总体摘要。"""
+async def node_summary_agent(state: ReviewGraphState, _github_client: GitHubClient, _store: ReviewJobStore) -> ReviewGraphState:
+    """节点 6：Summary Agent 生成总体摘要（调用 LLM）。"""
     if state.error:
         return state
     try:
@@ -142,17 +175,30 @@ def node_summary_agent(state: ReviewGraphState, _github_client: GitHubClient, _s
             parsed_diff=state.parsed_diff,
             ast_contexts=state.ast_contexts,
         )
-        result = summary_agent.run(ctx)
+        result = await summary_agent.run_async(ctx)
         state.summary_text = result.summary
         state.agent_results.append(result)
+        # SSE 推送摘要文本流
+        if result.summary:
+            _store.add_progress_event(
+                state.job_id,
+                {"type": "chunk", "target": "summary", "content": result.summary},
+            )
     except Exception as exc:
+        try:
+            result = summary_agent.run(ctx)
+            state.summary_text = result.summary
+            state.agent_results.append(result)
+        except Exception:
+            pass
         state.warnings.append(f"SUMMARY_AGENT: {exc}")
-        state.summary_text = f"PR 涉及 {len(state.parsed_diff)} 个文件变更。"
+        if not state.summary_text:
+            state.summary_text = f"PR 涉及 {len(state.parsed_diff)} 个文件变更。"
     return state
 
 
-def node_security_agent(state: ReviewGraphState, _github_client: GitHubClient, _store: ReviewJobStore) -> ReviewGraphState:
-    """节点 7：Security Agent。"""
+async def node_security_agent(state: ReviewGraphState, _github_client: GitHubClient, _store: ReviewJobStore) -> ReviewGraphState:
+    """节点 7：Security Agent（调用 LLM 分析安全风险）。"""
     if state.error:
         return state
     try:
@@ -161,15 +207,31 @@ def node_security_agent(state: ReviewGraphState, _github_client: GitHubClient, _
             parsed_diff=state.parsed_diff,
             ast_contexts=state.ast_contexts,
         )
-        result = security_agent.run(ctx)
+        result = await security_agent.run_async(ctx)
         state.agent_results.append(result)
+        # SSE 推送 finding 事件（"type":"finding" 放最后，避免被 f.type 覆盖）
+        for f in result.findings:
+            _store.add_progress_event(
+                state.job_id,
+                {
+                    "id": f.id, "agent": f.agent, "file": f.file, "line": f.line,
+                    "symbol": f.symbol or "", "level": f.level, "finding_type": f.type,
+                    "confidence": f.confidence, "description": f.description,
+                    "suggestion": f.suggestion, "type": "finding",
+                },
+            )
     except Exception as exc:
+        try:
+            result = security_agent.run(ctx)
+            state.agent_results.append(result)
+        except Exception:
+            pass
         state.warnings.append(f"SECURITY_AGENT: {exc}")
     return state
 
 
-def node_performance_agent(state: ReviewGraphState, _github_client: GitHubClient, _store: ReviewJobStore) -> ReviewGraphState:
-    """节点 8：Performance Agent。"""
+async def node_performance_agent(state: ReviewGraphState, _github_client: GitHubClient, _store: ReviewJobStore) -> ReviewGraphState:
+    """节点 8：Performance Agent（调用 LLM 分析性能风险）。"""
     if state.error:
         return state
     try:
@@ -178,15 +240,30 @@ def node_performance_agent(state: ReviewGraphState, _github_client: GitHubClient
             parsed_diff=state.parsed_diff,
             ast_contexts=state.ast_contexts,
         )
-        result = performance_agent.run(ctx)
+        result = await performance_agent.run_async(ctx)
         state.agent_results.append(result)
+        for f in result.findings:
+            _store.add_progress_event(
+                state.job_id,
+                {
+                    "id": f.id, "agent": f.agent, "file": f.file, "line": f.line,
+                    "symbol": f.symbol or "", "level": f.level, "finding_type": f.type,
+                    "confidence": f.confidence, "description": f.description,
+                    "suggestion": f.suggestion, "type": "finding",
+                },
+            )
     except Exception as exc:
+        try:
+            result = performance_agent.run(ctx)
+            state.agent_results.append(result)
+        except Exception:
+            pass
         state.warnings.append(f"PERFORMANCE_AGENT: {exc}")
     return state
 
 
-def node_test_agent(state: ReviewGraphState, _github_client: GitHubClient, _store: ReviewJobStore) -> ReviewGraphState:
-    """节点 9：Test Agent。"""
+async def node_test_agent(state: ReviewGraphState, _github_client: GitHubClient, _store: ReviewJobStore) -> ReviewGraphState:
+    """节点 9：Test Agent（调用 LLM 分析测试覆盖）。"""
     if state.error:
         return state
     try:
@@ -195,9 +272,24 @@ def node_test_agent(state: ReviewGraphState, _github_client: GitHubClient, _stor
             parsed_diff=state.parsed_diff,
             ast_contexts=state.ast_contexts,
         )
-        result = test_agent.run(ctx)
+        result = await test_agent.run_async(ctx)
         state.agent_results.append(result)
+        for f in result.findings:
+            _store.add_progress_event(
+                state.job_id,
+                {
+                    "id": f.id, "agent": f.agent, "file": f.file, "line": f.line,
+                    "symbol": f.symbol or "", "level": f.level, "finding_type": f.type,
+                    "confidence": f.confidence, "description": f.description,
+                    "suggestion": f.suggestion, "type": "finding",
+                },
+            )
     except Exception as exc:
+        try:
+            result = test_agent.run(ctx)
+            state.agent_results.append(result)
+        except Exception:
+            pass
         state.warnings.append(f"TEST_AGENT: {exc}")
     return state
 
@@ -208,6 +300,15 @@ def node_risk_judge(state: ReviewGraphState, _github_client: GitHubClient, _stor
         return state
     try:
         state.aggregated_risk = risk_judge_agent.aggregate(state.agent_results)
+        # SSE 推送最终风险统计
+        if state.aggregated_risk:
+            _store.add_progress_event(
+                state.job_id,
+                {
+                    "type": "chunk", "target": "report",
+                    "content": f"Risk Judge 完成：{len(state.aggregated_risk.findings)} 个风险，去重 {state.aggregated_risk.dedup_count} 个，风险等级 {state.aggregated_risk.risk_level}",
+                },
+            )
     except Exception as exc:
         state.warnings.append(f"RISK_JUDGE: {exc}")
     return state

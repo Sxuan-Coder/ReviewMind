@@ -32,8 +32,21 @@ export function ReportPage() {
   const [highlightLine, setHighlightLine] = useState<number | null>(null);
   const diffContainerRef = useRef<HTMLDivElement>(null);
 
+  // 选择第一个有 diff 数据的文件
+  const selectFirstDiffFile = (data: JobDetailResponse) => {
+    const firstWithDiff = data.report?.changed_files?.find(
+      (f) => f.old_code || f.new_code || f.patch,
+    );
+    if (firstWithDiff) setDiffFile(firstWithDiff);
+  };
+
   useEffect(() => {
-    if (detail) return;
+    // 如果已有 storeDetail 且包含完整数据，直接使用
+    if (detail && detail.report) {
+      setLoading(false);
+      selectFirstDiffFile(detail);
+      return;
+    }
     if (!jobId) {
       setError('缺少 Job ID');
       setLoading(false);
@@ -44,10 +57,7 @@ export function ReportPage() {
       .then((data) => {
         setDetail(data);
         setLoading(false);
-        const firstWithDiff = data.report?.changed_files?.find(
-          (f) => f.old_code || f.new_code || f.patch,
-        );
-        if (firstWithDiff) setDiffFile(firstWithDiff);
+        selectFirstDiffFile(data);
       })
       .catch((err) => {
         setError(err instanceof Error ? err.message : '加载报告失败');
@@ -348,7 +358,7 @@ export function ReportPage() {
             </TabsContent>
 
             <TabsContent value="diff" className="mt-0">
-              {filesWithDiff.length > 1 && (
+              {filesWithDiff.length > 0 && (
                 <div className="flex items-center gap-2 mb-4 overflow-x-auto pb-2">
                   {filesWithDiff.map((f) => (
                     <Button
@@ -370,6 +380,10 @@ export function ReportPage() {
                     </Button>
                   ))}
                 </div>
+              )}
+
+              {filesWithDiff.length === 0 && (
+                <p className="text-zinc-600 text-center py-8">该 PR 暂无 Diff 数据</p>
               )}
 
               <div ref={diffContainerRef} className="rounded-xl border border-zinc-800/40 overflow-hidden">
@@ -449,23 +463,26 @@ function renderSideBySideDiff(oldCode: string, newCode: string, filename: string
 function renderPatchView(patch: string) {
   const lines = patch.split('\n');
   return (
-    <div className="overflow-auto max-h-[70vh] p-3 font-mono text-xs">
+    <div className="overflow-auto max-h-[70vh] p-3 font-mono text-xs leading-5">
       {lines.map((line, i) => {
-        const isAdd = line.startsWith('+');
-        const isDel = line.startsWith('-');
+        const isAdd = line.startsWith('+') && !line.startsWith('+++');
+        const isDel = line.startsWith('-') && !line.startsWith('---');
         const isHunk = line.startsWith('@@');
+        const isEmpty = line.length === 0;
         return (
           <div
             key={i}
+            data-line={i + 1}
             className={cn(
-              'whitespace-pre-wrap py-0.5',
-              isAdd && 'text-emerald-400/80 bg-emerald-950/10',
-              isDel && 'text-red-400/80 bg-red-950/10',
-              isHunk && 'text-zinc-400/60',
-              !isAdd && !isDel && !isHunk && 'text-zinc-500',
+              'whitespace-pre py-px',
+              isAdd && 'text-emerald-400/80 bg-emerald-950/20',
+              isDel && 'text-red-400/80 bg-red-950/20',
+              isHunk && 'text-sky-400/80 bg-sky-950/10',
+              !isAdd && !isDel && !isHunk && !isEmpty && 'text-zinc-400',
+              isEmpty && 'h-4',
             )}
           >
-            {line}
+            {line || ' '}
           </div>
         );
       })}
