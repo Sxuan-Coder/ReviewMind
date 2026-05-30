@@ -51,10 +51,6 @@ class LLMClient:
             payload["response_format"] = response_format
 
         headers = {
-            "Authorization": "Bearer ***",
-            "Content-Type": "application/json",
-        }
-        real_headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
         }
@@ -63,7 +59,7 @@ class LLMClient:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 resp = await client.post(
                     f"{self._api_base}/chat/completions",
-                    headers=real_headers,
+                    headers=headers,
                     json=payload,
                 )
                 resp.raise_for_status()
