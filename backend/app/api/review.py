@@ -49,7 +49,9 @@ async def list_review_jobs(page: int = 1, page_size: int = 10) -> ApiResponse[Jo
 
 @review_router.get("/jobs/{job_id}", response_model=ApiResponse[ReviewJobDetailResponse])
 async def get_review_job_detail(job_id: str) -> ApiResponse[ReviewJobDetailResponse]:
-    return success_response(review_job_service.get_job_detail(job_id))
+    detail = review_job_service.get_job_detail(job_id)
+    await _hydrate_missing_report_patches(detail)
+    return success_response(detail)
 
 
 @review_router.get("/jobs/{job_id}/state", response_model=ReviewJobSnapshot)
@@ -181,6 +183,40 @@ def _format_event_data(event_type: str, event: dict[str, object]) -> dict[str, o
 
 def _format_sse(event_type: str, payload: dict[str, object]) -> str:
     return f"event: {event_type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+async def _hydrate_missing_report_patches(detail: ReviewJobDetailResponse) -> None:
+    """补齐旧任务报告中缺失的 patch，避免 Diff 视图无数据。"""
+    if detail.pr is None or detail.report is None:
+        return
+
+    missing_patch_files = [file for file in detail.report.changed_files if not file.patch]
+    if not missing_patch_files:
+        return
+
+    try:
+        pr_ref = GitHubPullRequestRef(
+            owner=detail.pr.owner,
+            repo=detail.pr.repo,
+            pull_number=detail.pr.number,
+            html_url=detail.pr.html_url,
+        )
+        github_files = await github_client.fetch_pull_request_files(pr_ref)
+    except Exception:
+        return
+
+    patch_by_filename = {
+        file.filename: file.patch
+        for file in github_files
+        if file.patch
+    }
+
+    for file in missing_patch_files:
+        patch = patch_by_filename.get(file.filename)
+        if patch:
+            file.patch = patch
+            if file.changes == 0:
+                file.changes = file.additions + file.deletions
 
 
 # --- GitHub 辅助接口 ---
