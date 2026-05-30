@@ -43,8 +43,12 @@ class ReviewJobService:
         self._task_runner = task_runner
 
     async def create_job(self, request: CreateReviewJobRequest) -> CreateReviewJobResponse:
+        import asyncio
+
         job_id = f"rev_{uuid4().hex[:8]}"
         job = ReviewJob(job_id=job_id, pr_url=str(request.pr_url))
+        # 注入 SSE 实时推送队列（最大 256 条，防止内存泄漏）
+        job.event_queue = asyncio.Queue(maxsize=256)
         self._store.create(job)
         self._store.add_progress_event(
             job_id,

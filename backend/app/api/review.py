@@ -1,7 +1,8 @@
+import asyncio
 import json
 from collections.abc import AsyncIterator
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 
 from app.schemas.common import ApiResponse, success_response
@@ -15,12 +16,19 @@ from app.schemas.review import (
 )
 from app.services.github_client import GitHubClient
 from app.services.github_url_parser import GitHubPullRequestUrlError, parse_github_pr_url
+from app.models.review_job import _QUEUE_DONE
 from app.services.review_job_service import review_job_service
+from app.services.review_job_store import ReviewJobNotFoundError, review_job_store
 
 review_router = APIRouter(prefix="/review", tags=["review"])
 github_router = APIRouter(prefix="/github", tags=["github"])
 
 github_client = GitHubClient()
+
+# SSE 心跳间隔（秒）
+SSE_HEARTBEAT_SECONDS = 15
+# SSE 队列读取超时（秒），到时间就发心跳
+SSE_QUEUE_TIMEOUT_SECONDS = 5
 
 
 # --- Review Job 接口 ---
@@ -59,32 +67,100 @@ async def cancel_review_job(job_id: str) -> ApiResponse[ReviewJobDetailResponse]
 
 @review_router.get("/stream/{job_id}")
 async def stream_review_progress(job_id: str) -> StreamingResponse:
-    job = review_job_service.get_job(job_id)
+    """SSE 实时进度流。
+
+    从 job 的异步事件队列读取事件并推送给前端。
+    支持心跳保活和优雅断开。
+    """
+    try:
+        job = review_job_store.get(job_id)  # 获取原始 ReviewJob（含 event_queue）
+    except ReviewJobNotFoundError:
+        # 返回 SSE 格式的错误事件，而不是 HTTP 404
+        async def error_stream() -> AsyncIterator[str]:
+            error_data = {"code": "JOB_NOT_FOUND", "message": f"Review job not found: {job_id}"}
+            yield _format_sse("error", error_data)
+            done_data = {"job_id": job_id, "status": "error", "message": "Job not found"}
+            yield _format_sse("done", done_data)
+
+        return StreamingResponse(error_stream(), media_type="text/event-stream")
+
+    event_queue = job.event_queue
 
     async def event_stream() -> AsyncIterator[str]:
+        # 先发送已收集的历史事件
+        history_count = len(job.progress_events)
         for event in job.progress_events:
             event_type = str(event.get("type", "progress"))
             data = _format_event_data(event_type, event)
             yield _format_sse(event_type, data)
 
-        if job.status == "failed":
-            warning_data = {
-                "code": "JOB_FAILED",
-                "message": job.error_message or "Review Job 执行失败",
-            }
-            yield _format_sse("warning", warning_data)
-
-        if job.status in {"completed", "failed"}:
-            done_data = {
-                "job_id": job_id,
-                "status": job.status,
-                "report_url": f"/api/v1/review/jobs/{job_id}",
-                "total_findings": _count_findings(job),
-                "duration_ms": _calc_duration_ms(job),
-            }
+        # 如果任务已经结束，直接发送 done 并退出
+        if job.status in {"completed", "failed", "cancelled"}:
+            done_data = _build_done_data(job_id, job.status, job.error_message)
             yield _format_sse("done", done_data)
+            return
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+        # 实时等待新事件（跳过已在历史中发送的事件）
+        last_heartbeat = 0.0
+        loop = asyncio.get_event_loop()
+        skipped = 0  # 已跳过的队列事件数
+
+        while True:
+            try:
+                item = await asyncio.wait_for(event_queue.get(), timeout=SSE_QUEUE_TIMEOUT_SECONDS)
+
+                # 跳过队列中已有的历史事件
+                if skipped < history_count:
+                    skipped += 1
+                    continue
+
+                # 检查是否是结束信号
+                if item is _QUEUE_DONE:
+                    break
+
+                if isinstance(item, dict):
+                    event_type = str(item.get("type", "progress"))
+                    data = _format_event_data(event_type, item)
+                    yield _format_sse(event_type, data)
+
+            except asyncio.TimeoutError:
+                # 超时 → 发送心跳注释
+                now = loop.time()
+                if now - last_heartbeat >= SSE_HEARTBEAT_SECONDS:
+                    yield ": heartbeat\n\n"
+                    last_heartbeat = now
+
+        # 循环结束 → 发送 done
+        # 重新读取 job 状态（可能已被更新）
+        try:
+            current_job = review_job_store.get(job_id)
+            final_status = current_job.status
+            error_msg = current_job.error_message
+        except ReviewJobNotFoundError:
+            final_status = "unknown"
+            error_msg = None
+
+        done_data = _build_done_data(job_id, final_status, error_msg)
+        yield _format_sse("done", done_data)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # 禁用 nginx 缓冲
+        },
+    )
+
+
+def _build_done_data(job_id: str, status: str, error_message: str | None = None) -> dict:
+    return {
+        "job_id": job_id,
+        "status": status,
+        "report_url": f"/api/v1/review/jobs/{job_id}",
+        "error_message": error_message,
+    }
 
 
 def _format_event_data(event_type: str, event: dict[str, object]) -> dict[str, object]:
@@ -98,19 +174,6 @@ def _format_event_data(event_type: str, event: dict[str, object]) -> dict[str, o
     if event_type == "warning":
         return {"code": event.get("step", "WARNING"), "message": event.get("message", ""), "file": event.get("file")}
     return event
-
-
-def _count_findings(job: ReviewJobSnapshot) -> int:
-    if hasattr(job, "pipeline_result") and job.pipeline_result:
-        pass
-    return 0
-
-
-def _calc_duration_ms(job: ReviewJobSnapshot) -> int:
-    if job.created_at and hasattr(job, "updated_at") and job.updated_at:
-        delta = job.updated_at - job.created_at
-        return int(delta.total_seconds() * 1000)
-    return 0
 
 
 def _format_sse(event_type: str, payload: dict[str, object]) -> str:
