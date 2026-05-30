@@ -25,6 +25,7 @@ interface ReviewState {
   // Chunks
   summaryChunks: string[];
   reportChunks: string[];
+  fileList: string[];  // 实时文件列表（SSE chunk 推送）
 
   // Final report
   detail: JobDetailResponse | null;
@@ -47,6 +48,7 @@ interface ReviewState {
   addFinding: (finding: Finding) => void;
   addSummaryChunk: (content: string) => void;
   addReportChunk: (content: string) => void;
+  setFileList: (files: string[]) => void;
   setDetail: (detail: JobDetailResponse) => void;
   setSSEStatus: (status: SSEConnectionStatus) => void;
   setStartedAt: (ts: number) => void;
@@ -63,6 +65,7 @@ const initialState = {
   findings: [] as Finding[],
   summaryChunks: [] as string[],
   reportChunks: [] as string[],
+  fileList: [] as string[],
   detail: null,
   sseStatus: 'idle' as SSEConnectionStatus,
   startedAt: null,
@@ -96,6 +99,7 @@ export const useReviewStore = create<ReviewState>((set) => ({
     set((state) => ({ summaryChunks: [...state.summaryChunks, content] })),
   addReportChunk: (content) =>
     set((state) => ({ reportChunks: [...state.reportChunks, content] })),
+  setFileList: (files) => set({ fileList: files }),
   setDetail: (detail) => set({ detail, jobStatus: detail.status }),
   setSSEStatus: (sseStatus) => set({ sseStatus }),
   setStartedAt: (ts) => set({ startedAt: ts }),
