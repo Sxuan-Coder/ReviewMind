@@ -167,8 +167,11 @@ def _format_event_data(event_type: str, event: dict[str, object]) -> dict[str, o
     if event_type == "progress":
         return {"step": event.get("step", ""), "percent": event.get("percent", 0), "message": event.get("message", "")}
     if event_type == "finding":
-        finding_keys = {"id", "agent", "file", "line", "symbol", "level", "type", "confidence", "description", "suggestion"}
-        return {k: v for k, v in event.items() if k in finding_keys}
+        finding_keys = {"id", "agent", "file", "line", "symbol", "level", "type", "finding_type", "confidence", "description", "suggestion"}
+        result = {k: v for k, v in event.items() if k in finding_keys}
+        if "finding_type" in result:
+            result["type"] = result.pop("finding_type")
+        return result
     if event_type == "chunk":
         return {"target": event.get("target", "summary"), "content": event.get("content", "")}
     if event_type == "warning":
