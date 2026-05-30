@@ -3,7 +3,6 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Loader2, Clock, AlertTriangle, Wifi, XCircle, CheckCircle2, Ban, ArrowLeft, FileText } from 'lucide-react';
 import { useReviewStream } from '../hooks/useReviewStream';
-import { useReviewStore } from '../store/reviewStore';
 import { getJobDetail, cancelJob as cancelJobApi } from '../services/reviewApi';
 import { ProgressTimeline } from '../components/ProgressTimeline';
 import { FindingCard } from '../components/FindingCard';
@@ -16,8 +15,7 @@ import type { PullRequestInfo } from '../types';
 export function AnalysisPage() {
   const { jobId } = useParams<{ jobId: string }>();
   const navigate = useNavigate();
-  const useMock = useReviewStore((s) => s.useMock);
-  const store = useReviewStream(jobId, useMock);
+  const store = useReviewStream(jobId);
 
   const [expandedFindings, setExpandedFindings] = useState<Set<string>>(new Set());
   const [elapsed, setElapsed] = useState(0);
@@ -26,12 +24,12 @@ export function AnalysisPage() {
 
   useEffect(() => {
     if (!jobId) return;
-    getJobDetail(jobId, useMock)
+    getJobDetail(jobId)
       .then((d) => {
         if (d.pr) setPrInfo(d.pr);
       })
       .catch(() => {});
-  }, [jobId, useMock]);
+  }, [jobId]);
 
   useEffect(() => {
     if (!store.startedAt) return;
@@ -45,7 +43,7 @@ export function AnalysisPage() {
     if (store.jobStatus === 'completed' && jobId) {
       const fetchAndGo = async () => {
         try {
-          const detail = await getJobDetail(jobId, useMock);
+          const detail = await getJobDetail(jobId);
           store.setDetail(detail);
           navigate(`/report/${jobId}`);
         } catch (err) {
@@ -58,19 +56,19 @@ export function AnalysisPage() {
       const t = setTimeout(fetchAndGo, 800);
       return () => clearTimeout(t);
     }
-  }, [store.jobStatus, jobId, navigate, useMock]);
+  }, [store.jobStatus, jobId, navigate]);
 
   const handleCancel = useCallback(async () => {
     if (!jobId || cancelling) return;
     setCancelling(true);
     try {
-      await cancelJobApi(jobId, useMock);
+      await cancelJobApi(jobId);
       store.setJobStatus('cancelled');
       store.setSSEStatus('disconnected');
     } catch {
       setCancelling(false);
     }
-  }, [jobId, useMock, cancelling]);
+  }, [jobId, cancelling]);
 
   function toggleFinding(id: string) {
     setExpandedFindings((prev) => {
