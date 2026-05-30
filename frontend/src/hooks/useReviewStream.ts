@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import { useReviewStore } from '../store/reviewStore';
 import { mockSSESequence } from '../mock/data';
 import type {
@@ -11,11 +11,237 @@ import type {
   ErrorEvent,
 } from '../types';
 
+/** SSE 连接超时（毫秒）：超过此时间未收到任何事件则判定为连接异常 */
+const SSE_CONNECT_TIMEOUT_MS = 15_000;
+/** SSE 静默超时（毫秒）：超过此时间未收到任何数据则判定为连接中断 */
+const SSE_IDLE_TIMEOUT_MS = 45_000;
+/** 最大重连次数 */
+const MAX_RECONNECT_ATTEMPTS = 3;
+/** 重连基础延迟（毫秒） */
+const RECONNECT_BASE_DELAY_MS = 2000;
+
 export function useReviewStream(jobId: string | undefined, useMock: boolean) {
   const store = useReviewStore();
   const timerRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const eventSourceRef = useRef<EventSource | null>(null);
+  const connectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectCountRef = useRef(0);
+  const mountedRef = useRef(true);
+
+  /** 重置空闲计时器 */
+  const resetIdleTimer = useCallback(() => {
+    if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    idleTimerRef.current = setTimeout(() => {
+      if (!mountedRef.current) return;
+      console.warn('[SSE] 连接静默超时，无数据返回');
+      store.setSSEStatus('error');
+      eventSourceRef.current?.close();
+    }, SSE_IDLE_TIMEOUT_MS);
+  }, [store]);
+
+  /** 清除所有计时器 */
+  const clearAllTimers = useCallback(() => {
+    if (connectTimerRef.current) {
+      clearTimeout(connectTimerRef.current);
+      connectTimerRef.current = null;
+    }
+    if (idleTimerRef.current) {
+      clearTimeout(idleTimerRef.current);
+      idleTimerRef.current = null;
+    }
+    timerRef.current.forEach(clearTimeout);
+    timerRef.current = [];
+  }, []);
+
+  /** 建立 SSE 连接 */
+  const connectSSE = useCallback(() => {
+    if (!jobId || !mountedRef.current) return;
+
+    const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api/v1';
+    const streamUrl = `${apiBaseUrl}/review/stream/${jobId}`;
+
+    // 关闭旧连接
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+    }
+
+    const eventSource = new EventSource(streamUrl);
+    eventSourceRef.current = eventSource;
+
+    // 连接超时计时器
+    connectTimerRef.current = setTimeout(() => {
+      if (eventSource.readyState === EventSource.CONNECTING) {
+        console.warn('[SSE] 连接超时，无法建立连接');
+        store.setSSEStatus('error');
+        eventSource.close();
+      }
+    }, SSE_CONNECT_TIMEOUT_MS);
+
+    // 连接建立
+    eventSource.onopen = () => {
+      if (!mountedRef.current) return;
+      if (connectTimerRef.current) {
+        clearTimeout(connectTimerRef.current);
+        connectTimerRef.current = null;
+      }
+      store.setSSEStatus('connected');
+      reconnectCountRef.current = 0; // 重置重连计数
+      resetIdleTimer();
+    };
+
+    // 通用消息监听（兼容没有明确 event: 字段的消息）
+    eventSource.onmessage = (_e: MessageEvent) => {
+      if (!mountedRef.current) return;
+      resetIdleTimer();
+      // 尝试解析为各类事件
+      try {
+        const data = JSON.parse(_e.data);
+        if (data && typeof data === 'object') {
+          dispatchSSEEvent('progress', data);
+        }
+      } catch {
+        // 非 JSON 数据，忽略
+      }
+    };
+
+    // 按事件类型监听
+    eventSource.addEventListener('progress', (e: MessageEvent) => {
+      if (!mountedRef.current) return;
+      resetIdleTimer();
+      try {
+        const data: ProgressEvent = JSON.parse(e.data);
+        store.setProgress(data);
+      } catch (err) {
+        console.warn('[SSE] 解析 progress 事件失败:', err);
+      }
+    });
+
+    eventSource.addEventListener('finding', (e: MessageEvent) => {
+      if (!mountedRef.current) return;
+      resetIdleTimer();
+      try {
+        const data: FindingEvent = JSON.parse(e.data);
+        store.addFinding(data as unknown as Finding);
+      } catch (err) {
+        console.warn('[SSE] 解析 finding 事件失败:', err);
+      }
+    });
+
+    eventSource.addEventListener('chunk', (e: MessageEvent) => {
+      if (!mountedRef.current) return;
+      resetIdleTimer();
+      try {
+        const data: ChunkEvent = JSON.parse(e.data);
+        if (data.target === 'summary') {
+          store.addSummaryChunk(data.content);
+        } else if (data.target === 'files') {
+          // 文件列表 JSON 数组字符串
+          try {
+            const files = JSON.parse(data.content);
+            if (Array.isArray(files)) {
+              store.setFileList(files);
+            }
+          } catch {
+            store.setFileList([data.content]);
+          }
+        } else {
+          store.addReportChunk(data.content);
+        }
+      } catch (err) {
+        console.warn('[SSE] 解析 chunk 事件失败:', err);
+      }
+    });
+
+    eventSource.addEventListener('warning', (e: MessageEvent) => {
+      if (!mountedRef.current) return;
+      resetIdleTimer();
+      try {
+        const data: WarningEvent = JSON.parse(e.data);
+        console.warn('[SSE] 后端警告:', data.code, data.message);
+      } catch {
+        // ignore parse errors
+      }
+    });
+
+    eventSource.addEventListener('done', (e: MessageEvent) => {
+      if (!mountedRef.current) return;
+      clearAllTimers();
+      try {
+        const data: DoneEvent = JSON.parse(e.data);
+        store.setDurationMs(data.duration_ms ?? 0);
+
+        if (data.status === 'failed') {
+          store.setJobStatus('failed');
+          store.setSSEStatus('error');
+          console.error('[SSE] 任务执行失败:', data.error_message);
+        } else if (data.status === 'cancelled') {
+          store.setJobStatus('cancelled');
+          store.setSSEStatus('disconnected');
+        } else {
+          store.setJobStatus('completed');
+          store.setSSEStatus('disconnected');
+        }
+      } catch (err) {
+        console.warn('[SSE] 解析 done 事件失败:', err);
+        store.setSSEStatus('disconnected');
+      }
+      eventSource.close();
+    });
+
+    eventSource.addEventListener('error', (e: Event) => {
+      if (!mountedRef.current) return;
+      // EventSource 原生 error 事件的 data 可能为空
+      const msgEvent = e as MessageEvent;
+      if (msgEvent.data) {
+        try {
+          const data: ErrorEvent = JSON.parse(msgEvent.data);
+          console.error('[SSE] 服务端错误:', data.code, data.message);
+        } catch {
+          console.error('[SSE] 未知错误');
+        }
+      }
+    });
+
+    // EventSource 原生错误处理（网络断开等）
+    eventSource.onerror = () => {
+      if (!mountedRef.current) return;
+
+      if (connectTimerRef.current) {
+        clearTimeout(connectTimerRef.current);
+        connectTimerRef.current = null;
+      }
+
+      if (eventSource.readyState === EventSource.CLOSED) {
+        // 连接已关闭 → 尝试重连
+        if (reconnectCountRef.current < MAX_RECONNECT_ATTEMPTS) {
+          reconnectCountRef.current += 1;
+          const delay = RECONNECT_BASE_DELAY_MS * Math.pow(2, reconnectCountRef.current - 1);
+          console.warn(
+            `[SSE] 连接断开，${delay / 1000}s 后尝试第 ${reconnectCountRef.current}/${MAX_RECONNECT_ATTEMPTS} 次重连...`,
+          );
+          store.setSSEStatus('connecting');
+
+          const timer = setTimeout(() => {
+            if (mountedRef.current) {
+              connectSSE();
+            }
+          }, delay);
+          timerRef.current.push(timer);
+        } else {
+          console.error('[SSE] 已达最大重连次数，放弃重连');
+          store.setSSEStatus('error');
+        }
+      }
+      // EventSource.CONNECTING (0) / OPEN (1) / CLOSED (2)
+    };
+
+    return eventSource;
+  }, [jobId, store, clearAllTimers, resetIdleTimer]);
 
   useEffect(() => {
+    mountedRef.current = true;
+
     if (!jobId) return;
 
     store.reset();
@@ -23,7 +249,6 @@ export function useReviewStream(jobId: string | undefined, useMock: boolean) {
     store.setStartedAt(Date.now());
 
     if (useMock) {
-      // Simulate SSE with mock data
       store.setSSEStatus('connected');
 
       let cumulativeDelay = 0;
@@ -32,6 +257,7 @@ export function useReviewStream(jobId: string | undefined, useMock: boolean) {
       for (const event of mockSSESequence) {
         cumulativeDelay += event.delayMs;
         const timer = setTimeout(() => {
+          if (!mountedRef.current) return;
           handleMockEvent(event.event, event.data as any);
         }, cumulativeDelay);
         timers.push(timer);
@@ -40,120 +266,86 @@ export function useReviewStream(jobId: string | undefined, useMock: boolean) {
       timerRef.current = timers;
 
       return () => {
-        timers.forEach(clearTimeout);
+        mountedRef.current = false;
+        clearAllTimers();
       };
     }
 
-    // Real SSE connection
-    const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api/v1';
-    const streamUrl = `${apiBaseUrl}/review/stream/${jobId}`;
-    const eventSource = new EventSource(streamUrl);
-
-    eventSource.addEventListener('progress', (e: MessageEvent) => {
-      const data: ProgressEvent = JSON.parse(e.data);
-      store.setProgress(data);
-    });
-
-    eventSource.addEventListener('finding', (e: MessageEvent) => {
-      const data: FindingEvent = JSON.parse(e.data);
-      store.addFinding(data as any);
-    });
-
-    eventSource.addEventListener('chunk', (e: MessageEvent) => {
-      const data: ChunkEvent = JSON.parse(e.data);
-      if (data.target === 'summary') {
-        store.addSummaryChunk(data.content);
-      } else {
-        store.addReportChunk(data.content);
-      }
-    });
-
-    eventSource.addEventListener('warning', (_e: MessageEvent) => {
-      // Warnings are non-fatal, just log for now
-    });
-
-    eventSource.addEventListener('done', (e: MessageEvent) => {
-      const data: DoneEvent = JSON.parse(e.data);
-      store.setDurationMs(data.duration_ms);
-      store.setJobStatus('completed');
-      store.setSSEStatus('disconnected');
-      eventSource.close();
-    });
-
-    eventSource.addEventListener('error', (e: MessageEvent) => {
-      if (e.data) {
-        try {
-          const data: ErrorEvent = JSON.parse(e.data);
-          console.error('SSE error:', data.message);
-        } catch {
-          // ignore parse errors
-        }
-      }
-      store.setSSEStatus('error');
-      eventSource.close();
-    });
-
-    eventSource.onopen = () => {
-      store.setSSEStatus('connected');
-    };
-
-    eventSource.onerror = () => {
-      // EventSource may reconnect automatically; only set error if not connected
-      if (eventSource.readyState === EventSource.CLOSED) {
-        store.setSSEStatus('error');
-      }
-    };
+    // 真实 SSE 连接
+    connectSSE();
 
     return () => {
-      eventSource.close();
+      mountedRef.current = false;
+      clearAllTimers();
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
     };
-  }, [jobId, useMock]);
+  }, [jobId, useMock]); // connectSSE 变更时不重建连接
 
-  // Cleanup timers on unmount
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
+      mountedRef.current = false;
+      clearAllTimers();
       timerRef.current.forEach(clearTimeout);
     };
-  }, []);
+  }, [clearAllTimers]);
 
   return store;
 }
 
-function handleMockEvent(
-  eventType: string,
-  data: ProgressEvent | ChunkEvent | FindingEvent | WarningEvent | DoneEvent | ErrorEvent,
-) {
+function dispatchSSEEvent(eventType: string, data: Record<string, unknown>) {
   const store = useReviewStore.getState();
 
   switch (eventType) {
     case 'progress':
-      store.setProgress(data as ProgressEvent);
+      store.setProgress(data as unknown as ProgressEvent);
       break;
     case 'finding':
       store.addFinding(data as unknown as Finding);
       break;
     case 'chunk': {
-      const chunk = data as ChunkEvent;
+      const chunk = data as unknown as ChunkEvent;
       if (chunk.target === 'summary') {
         store.addSummaryChunk(chunk.content);
+      } else if (chunk.target === 'files') {
+        try {
+          const files = JSON.parse(chunk.content);
+          if (Array.isArray(files)) store.setFileList(files);
+        } catch {
+          store.setFileList([chunk.content]);
+        }
       } else {
         store.addReportChunk(chunk.content);
       }
       break;
     }
     case 'warning':
-      // Non-fatal, currently not stored
       break;
     case 'done': {
-      const done = data as DoneEvent;
-      store.setDurationMs(done.duration_ms);
-      store.setJobStatus('completed');
+      const done = data as unknown as DoneEvent;
+      store.setDurationMs(done.duration_ms ?? 0);
+      store.setJobStatus(done.status === 'failed' ? 'failed' : 'completed');
       store.setSSEStatus('disconnected');
       break;
     }
     case 'error':
-      console.error('SSE error:', (data as ErrorEvent).message);
+      console.error('[SSE] 错误:', (data as unknown as ErrorEvent).message);
       store.setSSEStatus('error');
       break;
+    default:
+      // 未识别的事件类型，尝试按 progress 处理
+      if (data.step) {
+        store.setProgress(data as unknown as ProgressEvent);
+      }
   }
+}
+
+function handleMockEvent(
+  eventType: string,
+  data: ProgressEvent | ChunkEvent | FindingEvent | WarningEvent | DoneEvent | ErrorEvent,
+) {
+  dispatchSSEEvent(eventType, data as unknown as Record<string, unknown>);
 }

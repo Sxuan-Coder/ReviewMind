@@ -67,7 +67,11 @@ export async function getJobDetail(
 
   const response = await fetch(`${apiBaseUrl}/review/jobs/${jobId}`);
   if (!response.ok) {
-    throw new Error('获取 Review 报告失败');
+    if (response.status === 404) {
+      throw new Error('Review job not found (可能已过期，请重新发起分析)');
+    }
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.message || '获取 Review 报告失败');
   }
 
   const result: ApiResponse<JobDetailResponse> = await response.json();
