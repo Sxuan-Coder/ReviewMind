@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException, status
 
+from app.core.cache import redis_cache
 from app.models.review_job import ReviewJob
 from app.schemas.review import (
     ChangedFile,
@@ -35,6 +36,9 @@ from app.services.review_job_store import (
 )
 from app.services.review_pipeline import ReviewPipeline
 from app.services.review_task_runner import ReviewTaskRunner
+
+# 缓存 TTL（秒）
+_CACHE_TTL_JOB_DETAIL = 1800  # 30 分钟
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +97,12 @@ class ReviewJobService:
         )
 
     async def get_job_detail(self, job_id: str) -> ReviewJobDetailResponse:
+        # 尝试从缓存读取（仅对 completed/failed/cancelled 的终态 job 缓存）
+        cache_key = f"job:detail:{job_id}"
+        cached = await redis_cache.get(cache_key)
+        if cached is not None:
+            return ReviewJobDetailResponse.model_validate(cached)
+
         job = await self._get_job_or_404(job_id)
         pr = _build_pr_info(job.pr_info) if job.pr_info else None
         progress = _last_progress(job)
@@ -111,7 +121,7 @@ class ReviewJobService:
             logger.info("[SERVICE] get_job_detail | job=%s source=no_report status=%s pipeline_result=%s",
                         job_id, job.status, "present" if job.pipeline_result else "None")
 
-        return ReviewJobDetailResponse(
+        detail = ReviewJobDetailResponse(
             job_id=job.job_id,
             status=job.status,
             pr=pr,
@@ -123,6 +133,12 @@ class ReviewJobService:
             updated_at=job.updated_at,
             error_message=job.error_message,
         )
+
+        # 终态 job 缓存报告（避免重复构建）
+        if job.status in {ReviewJobStatus.completed, ReviewJobStatus.failed, ReviewJobStatus.cancelled}:
+            await redis_cache.set(cache_key, detail.model_dump(mode="json"), ttl_seconds=_CACHE_TTL_JOB_DETAIL)
+
+        return detail
 
     async def get_job(self, job_id: str) -> ReviewJobSnapshot:
         job = await self._get_job_or_404(job_id)

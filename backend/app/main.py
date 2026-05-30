@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
+from app.core.cache import redis_cache
 from app.core.config import settings
 from app.core.database import init_db
 from app.core.exception_handlers import register_exception_handlers
@@ -34,6 +35,10 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     async def startup() -> None:
         await init_db()
+
+    @app.on_event("shutdown")
+    async def shutdown() -> None:
+        await redis_cache.close()
 
     return app
 
