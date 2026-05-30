@@ -6,9 +6,8 @@ create_job 采用 async fire-and-forget 模式：
   3. 接口快速返回 CreateReviewJobResponse
 """
 
-from uuid import uuid4
-
 import asyncio
+from uuid import uuid4
 
 from fastapi import HTTPException, status
 
@@ -26,7 +25,12 @@ from app.schemas.review import (
     ReviewReport,
     ReviewReportStats,
 )
-from app.services.review_job_store import ReviewJobNotFoundError, ReviewJobStore, review_job_store
+from app.services.review_job_store import (
+    InvalidReviewJobTransitionError,
+    ReviewJobNotFoundError,
+    ReviewJobStore,
+    review_job_store,
+)
 from app.services.review_pipeline import ReviewPipeline
 from app.services.review_task_runner import ReviewTaskRunner
 
@@ -43,18 +47,14 @@ class ReviewJobService:
         self._task_runner = task_runner
 
     async def create_job(self, request: CreateReviewJobRequest) -> CreateReviewJobResponse:
-        import asyncio
-
         job_id = f"rev_{uuid4().hex[:8]}"
         job = ReviewJob(job_id=job_id, pr_url=str(request.pr_url))
-        # 注入 SSE 实时推送队列（最大 256 条，防止内存泄漏）
         job.event_queue = asyncio.Queue(maxsize=256)
         self._store.create(job)
         self._store.add_progress_event(
             job_id,
             {"step": "JOB_CREATED", "percent": 0, "message": "Review Job 已创建"},
         )
-        # 后台执行 pipeline，接口不等待
         if self._task_runner is not None:
             await self._task_runner.submit(job, self._make_pipeline_coro)
         else:
@@ -126,7 +126,13 @@ class ReviewJobService:
 
     def cancel_job(self, job_id: str) -> ReviewJobDetailResponse:
         job = self._get_job_or_404(job_id)
-        self._store.update_status(job_id, ReviewJobStatus.cancelled)
+        try:
+            self._store.update_status(job_id, ReviewJobStatus.cancelled)
+        except InvalidReviewJobTransitionError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
         return self.get_job_detail(job_id)
 
     def get_job_list(self, page: int = 1, page_size: int = 10) -> JobListResponse:

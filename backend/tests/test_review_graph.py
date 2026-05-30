@@ -72,7 +72,7 @@ async def test_review_graph_completes_with_mock_agents() -> None:
     assert result.parsed_diff[0]["changed_lines"] == [2, 3]
 
     # progress 事件覆盖所有节点
-    steps = [e["step"] for e in saved.progress_events]
+    steps = [e["step"] for e in saved.progress_events if "step" in e]
     assert "FETCH_PR" in steps
     assert "FETCH_FILES" in steps
     assert "DIFF_FILTER" in steps
