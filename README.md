@@ -109,6 +109,12 @@ docker-compose up --build
 | Pydantic / pydantic-settings | 数据校验与配置管理 |
 | Uvicorn | ASGI 服务器 |
 | httpx | 异步 HTTP 客户端，调用 GitHub API |
+| LangGraph | 多 Agent Review 工作流编排引擎 |
+| SQLAlchemy | ORM 与数据库访问层 |
+| aiosqlite | 异步 SQLite 驱动（开发 / 轻量部署） |
+| asyncpg | 异步 PostgreSQL 驱动（生产部署） |
+| pgvector | PostgreSQL 向量相似度检索 |
+| Redis | 缓存与异步消息队列 |
 | python-dotenv | 环境变量加载 |
 | pytest / pytest-asyncio | 测试框架 |
 
