@@ -60,8 +60,10 @@ class ReviewPipeline:
                 },
             )
 
-        return ReviewPipelineResult(
+        pipeline_result = ReviewPipelineResult(
             pr_info=result.pr_info,
             filtered_files=result.filtered_files,
             parsed_diff=result.parsed_diff,
         )
+        self._store.save_pipeline_result(job.job_id, pipeline_result)
+        return pipeline_result

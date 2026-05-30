@@ -37,9 +37,6 @@ interface ReviewState {
   startedAt: number | null;
   durationMs: number | null;
 
-  // Mock mode
-  useMock: boolean;
-
   // Actions
   setJob: (job: CreateJobResponse) => void;
   setJobStatus: (status: JobStatus) => void;
@@ -53,7 +50,6 @@ interface ReviewState {
   setSSEStatus: (status: SSEConnectionStatus) => void;
   setStartedAt: (ts: number) => void;
   setDurationMs: (ms: number) => void;
-  setUseMock: (useMock: boolean) => void;
   reset: () => void;
 }
 
@@ -70,7 +66,6 @@ const initialState = {
   sseStatus: 'idle' as SSEConnectionStatus,
   startedAt: null,
   durationMs: null,
-  useMock: false,
 };
 
 export const useReviewStore = create<ReviewState>((set) => ({
@@ -104,6 +99,5 @@ export const useReviewStore = create<ReviewState>((set) => ({
   setSSEStatus: (sseStatus) => set({ sseStatus }),
   setStartedAt: (ts) => set({ startedAt: ts }),
   setDurationMs: (ms) => set({ durationMs: ms }),
-  setUseMock: (useMock) => set({ useMock }),
   reset: () => set(initialState),
 }));

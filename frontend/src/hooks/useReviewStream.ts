@@ -1,6 +1,5 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useReviewStore } from '../store/reviewStore';
-import { mockSSESequence } from '../mock/data';
 import type {
   ProgressEvent,
   ChunkEvent,
@@ -20,7 +19,7 @@ const MAX_RECONNECT_ATTEMPTS = 3;
 /** 重连基础延迟（毫秒） */
 const RECONNECT_BASE_DELAY_MS = 2000;
 
-export function useReviewStream(jobId: string | undefined, useMock: boolean) {
+export function useReviewStream(jobId: string | undefined) {
   const store = useReviewStore();
   const timerRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -248,29 +247,6 @@ export function useReviewStream(jobId: string | undefined, useMock: boolean) {
     store.setSSEStatus('connecting');
     store.setStartedAt(Date.now());
 
-    if (useMock) {
-      store.setSSEStatus('connected');
-
-      let cumulativeDelay = 0;
-      const timers: ReturnType<typeof setTimeout>[] = [];
-
-      for (const event of mockSSESequence) {
-        cumulativeDelay += event.delayMs;
-        const timer = setTimeout(() => {
-          if (!mountedRef.current) return;
-          handleMockEvent(event.event, event.data as any);
-        }, cumulativeDelay);
-        timers.push(timer);
-      }
-
-      timerRef.current = timers;
-
-      return () => {
-        mountedRef.current = false;
-        clearAllTimers();
-      };
-    }
-
     // 真实 SSE 连接
     connectSSE();
 
@@ -282,7 +258,7 @@ export function useReviewStream(jobId: string | undefined, useMock: boolean) {
         eventSourceRef.current = null;
       }
     };
-  }, [jobId, useMock]); // connectSSE 变更时不重建连接
+  }, [jobId]); // connectSSE 变更时不重建连接
 
   // Cleanup on unmount
   useEffect(() => {
@@ -341,11 +317,4 @@ function dispatchSSEEvent(eventType: string, data: Record<string, unknown>) {
         store.setProgress(data as unknown as ProgressEvent);
       }
   }
-}
-
-function handleMockEvent(
-  eventType: string,
-  data: ProgressEvent | ChunkEvent | FindingEvent | WarningEvent | DoneEvent | ErrorEvent,
-) {
-  dispatchSSEEvent(eventType, data as unknown as Record<string, unknown>);
 }

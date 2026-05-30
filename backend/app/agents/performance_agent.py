@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from uuid import uuid4
 
+from app.agents.json_utils import try_parse_json
 from app.agents.prompts import PERFORMANCE_SYSTEM, build_user_prompt
 from app.core.llm import LLMClientError, llm_client
 from app.schemas.agents import AgentContext, AgentFindingsResult
@@ -24,7 +24,7 @@ async def run_async(context: AgentContext) -> AgentFindingsResult:
             ]
             logger.info("[PERF_AGENT] Calling LLM... files=%d", len(context.parsed_diff))
             raw = await llm_client.chat(messages, model=None, temperature=0.1)
-            parsed = _try_parse_json(raw)
+            parsed = try_parse_json(raw)
             findings = [
                 ReviewFinding(
                     id=f.get("id", f"perf_{uuid4().hex[:8]}"),
@@ -79,24 +79,3 @@ def run(context: AgentContext) -> AgentFindingsResult:
         findings=findings,
         summary="Mock performance agent completed.",
     )
-
-
-def _try_parse_json(raw: str) -> dict:
-    try:
-        return json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        if "```json" in raw:
-            try:
-                start = raw.index("```json") + 7
-                end = raw.index("```", start)
-                return json.loads(raw[start:end].strip())
-            except (ValueError, json.JSONDecodeError):
-                pass
-        if "```" in raw:
-            try:
-                start = raw.index("```") + 3
-                end = raw.index("```", start)
-                return json.loads(raw[start:end].strip())
-            except (ValueError, json.JSONDecodeError):
-                pass
-        return {"findings": []}

@@ -58,7 +58,7 @@ class LLMClient:
             payload["response_format"] = response_format
             logger.info("[LLM] response_format=%s", response_format)
 
-        real_headers = {
+        headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
         }
@@ -67,7 +67,7 @@ class LLMClient:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 resp = await client.post(
                     api_url,
-                    headers=real_headers,
+                    headers=headers,
                     json=payload,
                 )
                 logger.info("[LLM] Response status=%s content_length=%s", resp.status_code, len(resp.content))

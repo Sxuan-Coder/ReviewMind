@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 from app.models.review_job import ReviewJob
 from app.schemas.review import ReviewJobStatus
 from app.services.review_job_store import ReviewJobStore
+
+logger = logging.getLogger(__name__)
 
 
 class ReviewTaskRunner:
@@ -59,9 +62,7 @@ class ReviewTaskRunner:
         try:
             return await coro
         except Exception:
-            # pipeline 内部已经处理了状态更新（failed），
-            # 这里只需确保不会 unhandled exception
-            pass
+            logger.exception("[TaskRunner] Pipeline execution failed for job=%s", job_id)
 
     def _cleanup(self, job_id: str) -> None:
         """任务完成后清理运行状态。"""

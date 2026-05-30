@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import json
 import logging
 
+from app.agents.json_utils import try_parse_json
 from app.agents.prompts import SUMMARY_SYSTEM, build_user_prompt
 from app.core.llm import LLMClientError, llm_client
 from app.schemas.agents import AgentContext, AgentFindingsResult
@@ -22,7 +22,7 @@ async def run_async(context: AgentContext) -> AgentFindingsResult:
             ]
             logger.info("[SUMMARY_AGENT] Calling LLM... files=%d", len(context.parsed_diff))
             raw = await llm_client.chat(messages, model=None, temperature=0.2)
-            parsed = _try_parse_json(raw)
+            parsed = try_parse_json(raw, fallback_key="summary")
             logger.info("[SUMMARY_AGENT] LLM OK | summary_len=%d findings=%d",
                         len(parsed.get("summary", "")), len(parsed.get("findings", [])))
             return AgentFindingsResult(
@@ -51,25 +51,3 @@ def run(context: AgentContext) -> AgentFindingsResult:
 def _fallback_summary(context: AgentContext) -> str:
     files = [diff.get("file", "unknown") for diff in context.parsed_diff]
     return f"PR 涉及 {len(files)} 个文件变更，正在进行基础 Diff 分析。"
-
-
-def _try_parse_json(raw: str) -> dict:
-    try:
-        return json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        # 尝试从 markdown code block 中提取
-        if "```json" in raw:
-            try:
-                start = raw.index("```json") + 7
-                end = raw.index("```", start)
-                return json.loads(raw[start:end].strip())
-            except (ValueError, json.JSONDecodeError):
-                pass
-        if "```" in raw:
-            try:
-                start = raw.index("```") + 3
-                end = raw.index("```", start)
-                return json.loads(raw[start:end].strip())
-            except (ValueError, json.JSONDecodeError):
-                pass
-        return {"summary": raw[:500]}

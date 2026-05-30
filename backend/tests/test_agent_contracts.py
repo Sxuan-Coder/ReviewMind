@@ -114,7 +114,7 @@ def test_report_agent_generates_structured_comment():
     report = report_agent.generate_report("rev_test1", risk, "Test summary")
 
     assert report.risk_level == risk.risk_level
-    assert "AI Review Summary" in report.review_comment
+    assert "AI 审查摘要" in report.review_comment
     assert "Test summary" in report.review_comment
     assert report.stats["total_findings"] == len(risk.findings)
 
@@ -126,7 +126,7 @@ def test_report_agent_handles_no_findings():
     report = report_agent.generate_report("rev_test2", risk, "Clean PR")
 
     assert report.risk_level == "LOW"
-    assert "No significant findings" in report.review_comment
+    assert "未发现明显问题" in report.review_comment
     assert report.stats["total_findings"] == 0
 
 
