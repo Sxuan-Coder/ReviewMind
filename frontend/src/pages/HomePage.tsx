@@ -68,7 +68,10 @@ export function HomePage() {
 
     setLoading(true);
     try {
-      const job = await createReviewJob({ pr_url: prUrl.trim() });
+      const job = await createReviewJob({
+        pr_url: prUrl.trim(),
+        config: { enable_ast: true, enable_rag: true, strict_mode: true },
+      });
       storeSetJob(job);
       navigate(`/analysis/${job.job_id}`);
     } catch (err) {

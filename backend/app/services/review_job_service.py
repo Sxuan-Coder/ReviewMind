@@ -65,10 +65,12 @@ class ReviewJobService:
             job_id,
             {"step": "JOB_CREATED", "percent": 0, "message": "Review Job 已创建"},
         )
+        # 提取 config 用于 pipeline
+        config = request.config.model_dump() if request.config else {}
         if self._task_runner is not None:
-            await self._task_runner.submit(job, self._make_pipeline_coro)
+            await self._task_runner.submit(job, lambda j: self._pipeline.run(j, config=config))
         else:
-            asyncio.create_task(self._pipeline.run(job))
+            asyncio.create_task(self._pipeline.run(job, config=config))
 
         return CreateReviewJobResponse(
             job_id=job_id,

@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ExternalLink, ArrowLeft, Code, FileText, Shield, Diff, AlertTriangle, XCircle } from 'lucide-react';
+import { ExternalLink, ArrowLeft, Code, FileText, Shield, Diff, AlertTriangle, XCircle, MessageSquare, GitMerge, Loader2, CheckCircle2 } from 'lucide-react';
 import { useReviewStore } from '../store/reviewStore';
-import { getJobDetail, getPrPreviewFiles } from '../services/reviewApi';
+import { getJobDetail, getPrPreviewFiles, postReviewComment, mergePullRequest } from '../services/reviewApi';
 import { RiskSummary } from '../components/RiskSummary';
 import { FindingCard } from '../components/FindingCard';
 import { FileChangeList } from '../components/FileChangeList';
@@ -14,7 +14,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import type { ChangedFile, Finding, JobDetailResponse } from '../types';
+import type { ChangedFile, Finding, JobDetailResponse, MergeResponse, PostCommentResponse } from '../types';
 import { cn } from '../lib/utils';
 
 // 报告页骨架屏：加载时展示占位，保持布局结构一致
@@ -81,6 +81,18 @@ export function ReportPage() {
   const [highlightLine, setHighlightLine] = useState<number | null>(null);
   const diffContainerRef = useRef<HTMLDivElement>(null);
 
+  // 自动评论状态
+  const [commentLoading, setCommentLoading] = useState(false);
+  const [commentResult, setCommentResult] = useState<PostCommentResponse | null>(null);
+  const [commentError, setCommentError] = useState<string | null>(null);
+
+  // 合并 PR 状态
+  const [mergeLoading, setMergeLoading] = useState(false);
+  const [mergeResult, setMergeResult] = useState<MergeResponse | null>(null);
+  const [mergeError, setMergeError] = useState<string | null>(null);
+  const [showMergeOptions, setShowMergeOptions] = useState(false);
+  const [mergeMethod, setMergeMethod] = useState<'merge' | 'squash' | 'rebase'>('merge');
+
   // 选择第一个有 diff 数据的文件
   const selectFirstDiffFile = (data: JobDetailResponse) => {
     const firstWithDiff = data.report?.changed_files?.find(
@@ -113,6 +125,37 @@ export function ReportPage() {
         setLoading(false);
       });
   }, [jobId, detail]);
+
+  async function handlePostComment() {
+    if (!jobId) return;
+    setCommentLoading(true);
+    setCommentError(null);
+    setCommentResult(null);
+    try {
+      const result = await postReviewComment(jobId);
+      setCommentResult(result);
+    } catch (err) {
+      setCommentError(err instanceof Error ? err.message : '评论发布失败');
+    } finally {
+      setCommentLoading(false);
+    }
+  }
+
+  async function handleMerge() {
+    if (!jobId) return;
+    setMergeLoading(true);
+    setMergeError(null);
+    setMergeResult(null);
+    try {
+      const result = await mergePullRequest(jobId, { merge_method: mergeMethod });
+      setMergeResult(result);
+      setShowMergeOptions(false);
+    } catch (err) {
+      setMergeError(err instanceof Error ? err.message : 'PR 合并失败');
+    } finally {
+      setMergeLoading(false);
+    }
+  }
 
   function toggleFinding(id: string) {
     setExpandedFindings((prev) => {
@@ -285,11 +328,103 @@ export function ReportPage() {
                 <span>{pr.changed_files} 个文件</span>
               </div>
             </div>
-            <a href={pr.html_url} target="_blank" rel="noopener noreferrer">
-              <Button variant="outline" size="sm" className="border-zinc-800/60 text-muted-foreground hover:text-zinc-200">
-                <ExternalLink className="size-3" /> 查看 PR
-              </Button>
-            </a>
+            <div className="flex items-center gap-2 flex-wrap">
+              <a href={pr.html_url} target="_blank" rel="noopener noreferrer">
+                <Button variant="outline" size="sm" className="border-zinc-800/60 text-muted-foreground hover:text-zinc-200">
+                  <ExternalLink className="size-3" /> 查看 PR
+                </Button>
+              </a>
+
+              {/* 自动评论按钮 */}
+              {detail.status === 'completed' && report?.review_comment && (
+                commentResult ? (
+                  <a href={commentResult.html_url} target="_blank" rel="noopener noreferrer">
+                    <Button variant="outline" size="sm" className="border-emerald-500/30 text-emerald-400 hover:text-emerald-300 bg-emerald-950/20">
+                      <CheckCircle2 className="size-3" /> 查看评论
+                    </Button>
+                  </a>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handlePostComment}
+                    disabled={commentLoading}
+                    className="border-zinc-800/60 text-muted-foreground hover:text-zinc-200"
+                  >
+                    {commentLoading ? (
+                      <><Loader2 className="size-3 animate-spin" /> 发布中...</>
+                    ) : (
+                      <><MessageSquare className="size-3" /> 自动评论</>
+                    )}
+                  </Button>
+                )
+              )}
+
+              {/* 合并 PR 按钮 */}
+              {detail.status === 'completed' && (
+                mergeResult?.merged ? (
+                  <a href={mergeResult.html_url || pr.html_url} target="_blank" rel="noopener noreferrer">
+                    <Button variant="outline" size="sm" className="border-emerald-500/30 text-emerald-400 hover:text-emerald-300 bg-emerald-950/20">
+                      <CheckCircle2 className="size-3" /> 已合并
+                    </Button>
+                  </a>
+                ) : showMergeOptions ? (
+                  <div className="flex items-center gap-1.5">
+                    <select
+                      value={mergeMethod}
+                      onChange={(e) => setMergeMethod(e.target.value as 'merge' | 'squash' | 'rebase')}
+                      className="h-8 rounded-md border border-zinc-800/60 bg-zinc-950/70 text-xs text-zinc-300 px-2"
+                    >
+                      <option value="merge">Merge</option>
+                      <option value="squash">Squash</option>
+                      <option value="rebase">Rebase</option>
+                    </select>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleMerge}
+                      disabled={mergeLoading}
+                      className="border-emerald-500/30 text-emerald-400 hover:text-emerald-300 bg-emerald-950/20"
+                    >
+                      {mergeLoading ? <Loader2 className="size-3 animate-spin" /> : '确认合并'}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setShowMergeOptions(false)}
+                      className="text-zinc-500 hover:text-zinc-300 h-8 px-2"
+                    >
+                      取消
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowMergeOptions(true)}
+                    disabled={mergeLoading}
+                    className="border-zinc-800/60 text-muted-foreground hover:text-zinc-200"
+                  >
+                    {mergeLoading ? (
+                      <><Loader2 className="size-3 animate-spin" /> 合并中...</>
+                    ) : (
+                      <><GitMerge className="size-3" /> 合并 PR</>
+                    )}
+                  </Button>
+                )
+              )}
+            </div>
+
+            {/* 评论/合并状态消息 */}
+            {commentError && (
+              <p className="text-xs text-red-400 mt-2">{commentError}</p>
+            )}
+            {mergeError && (
+              <p className="text-xs text-red-400 mt-2">{mergeError}</p>
+            )}
+            {mergeResult && !mergeResult.merged && (
+              <p className="text-xs text-amber-400 mt-2">{mergeResult.message}</p>
+            )}
           </CardContent>
         </Card>
       )}

@@ -9,6 +9,7 @@ class AgentContext(BaseModel):
     pr_info: dict[str, Any] = Field(default_factory=dict)
     parsed_diff: list[dict[str, Any]] = Field(default_factory=list)
     ast_contexts: list[dict[str, Any]] = Field(default_factory=list)
+    rag_contexts: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class AgentFindingsResult(BaseModel):

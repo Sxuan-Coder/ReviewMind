@@ -27,6 +27,17 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int = 1536
 
+    # RAG 分级触发阈值
+    rag_light_min_files: int = 5
+    rag_light_min_lines: int = 200
+    rag_full_min_files: int = 15
+    rag_full_min_lines: int = 1000
+    # RAG 检索参数
+    rag_top_k_light: int = 3
+    rag_top_k_full: int = 5
+    rag_max_snippet_chars: int = 2000
+    rag_cache_ttl_seconds: int = 3600
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

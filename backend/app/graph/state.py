@@ -26,6 +26,14 @@ class ReviewGraphState:
     # ast_context 输出
     ast_contexts: list[dict[str, Any]] = field(default_factory=list)
 
+    # rag_context 输出
+    rag_level: int = 0                     # RagTriggerLevel 值
+    rag_trigger_reason: str = ""           # 触发原因摘要
+    rag_contexts: list[dict[str, Any]] = field(default_factory=list)  # 检索到的相似代码
+
+    # 审查配置
+    config: dict[str, Any] = field(default_factory=dict)
+
     # agents 输出
     summary_text: str = ""
     agent_results: list[Any] = field(default_factory=list)

@@ -11,12 +11,14 @@ from app.schemas.review import (
     CreateReviewJobRequest,
     CreateReviewJobResponse,
     JobListResponse,
+    MergeRequest,
+    MergeResponse,
     PostCommentRequest,
     PostCommentResponse,
     ReviewJobDetailResponse,
     ReviewJobSnapshot,
 )
-from app.services.github_client import GitHubClient
+from app.services.github_client import GitHubClient, GitHubClientError
 from app.services.github_comment import GitHubCommentError, post_pr_comment
 from app.services.github_url_parser import GitHubPullRequestUrlError, parse_github_pr_url
 from app.models.review_job import _QUEUE_DONE
@@ -94,6 +96,50 @@ async def post_review_comment(job_id: str, request: PostCommentRequest | None = 
         return success_response(None, message=str(exc), code=50000)
 
     return success_response(PostCommentResponse(comment_id=result.comment_id, html_url=result.html_url))
+
+
+@review_router.post("/jobs/{job_id}/merge", response_model=ApiResponse[MergeResponse])
+async def merge_pr(job_id: str, request: MergeRequest | None = None) -> ApiResponse[MergeResponse]:
+    """合并已审查完成的 PR。
+
+    支持 merge / squash / rebase 三种合并方式。
+    需要 GitHub Token 具有写权限。
+    """
+    detail = await review_job_service.get_job_detail(job_id)
+    if detail.pr is None:
+        return success_response(None, message="PR info not available for this job", code=40000)
+
+    if detail.status != "completed":
+        return success_response(None, message=f"Job must be completed before merging (current: {detail.status})", code=40000)
+
+    pr_ref = GitHubPullRequestRef(
+        owner=detail.pr.owner,
+        repo=detail.pr.repo,
+        pull_number=detail.pr.number,
+        html_url=detail.pr.html_url,
+    )
+
+    options = request or MergeRequest()
+    try:
+        result = await github_client.merge_pull_request(
+            pr_ref,
+            commit_title=options.commit_title,
+            commit_message=options.commit_message,
+            merge_method=options.merge_method,
+        )
+    except GitHubClientError as exc:
+        return success_response(
+            MergeResponse(merged=False, message=str(exc), html_url=detail.pr.html_url),
+            message=str(exc),
+            code=50000,
+        )
+
+    return success_response(MergeResponse(
+        merged=result.get("merged", False),
+        message=result.get("message", ""),
+        sha=result.get("sha"),
+        html_url=detail.pr.html_url,
+    ))
 
 
 @review_router.get("/stream/{job_id}")

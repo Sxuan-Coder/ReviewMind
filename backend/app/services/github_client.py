@@ -82,6 +82,49 @@ class GitHubClient:
         await redis_cache.set(cache_key, [f.model_dump(mode="json") for f in files], ttl_seconds=_CACHE_TTL_PR_FILES)
         return files
 
+    async def merge_pull_request(
+        self,
+        pr_ref: GitHubPullRequestRef,
+        commit_title: str | None = None,
+        commit_message: str | None = None,
+        merge_method: str = "merge",
+    ) -> dict[str, Any]:
+        """调用 GitHub API 合并 PR。
+
+        PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge
+
+        Args:
+            pr_ref: PR 引用
+            commit_title: 合并 commit 标题
+            commit_message: 合并 commit 消息
+            merge_method: 合并方式 — 'merge', 'squash', 或 'rebase'
+
+        Returns:
+            {"merged": bool, "message": str, "sha": str | None}
+        """
+        path = f"/repos/{pr_ref.owner}/{pr_ref.repo}/pulls/{pr_ref.pull_number}/merge"
+        body: dict[str, Any] = {"merge_method": merge_method}
+        if commit_title:
+            body["commit_title"] = commit_title
+        if commit_message:
+            body["commit_message"] = commit_message
+
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "Content-Type": "application/json",
+        }
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+
+        if self.client is not None:
+            response = await self.client.put(path, headers=headers, json=body)
+            return _handle_merge_response(response)
+
+        async with httpx.AsyncClient(base_url=self.api_base_url, timeout=self.timeout_seconds) as client:
+            response = await client.put(path, headers=headers, json=body)
+            return _handle_merge_response(response)
+
     async def _get_json(self, path: str) -> Any:
         headers = {
             "Accept": "application/vnd.github+json",
@@ -109,6 +152,39 @@ def _handle_response(response: httpx.Response) -> Any:
     if response.status_code >= 400:
         raise GitHubClientError("GitHub API request failed", status_code=response.status_code)
     return response.json()
+
+
+def _handle_merge_response(response: httpx.Response) -> dict[str, Any]:
+    """处理 GitHub merge API 响应，包括特殊状态码。"""
+    if response.status_code == 200:
+        data = response.json()
+        return {
+            "merged": bool(data.get("merged", False)),
+            "message": str(data.get("message", "Merged")),
+            "sha": data.get("sha"),
+        }
+    if response.status_code == 204:
+        return {"merged": True, "message": "Already merged", "sha": None}
+    if response.status_code == 401:
+        raise GitHubClientError("GitHub token is invalid", status_code=401)
+    if response.status_code == 403:
+        raise GitHubClientError("GitHub API rate limit or permission denied", status_code=403)
+    if response.status_code == 404:
+        raise GitHubClientError("GitHub pull request was not found", status_code=404)
+    if response.status_code == 405:
+        raise GitHubClientError("Merge method not allowed for this PR", status_code=405)
+    if response.status_code == 409:
+        raise GitHubClientError("PR cannot be merged due to conflicts or required checks", status_code=409)
+    if response.status_code >= 400:
+        data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+        msg = str(data.get("message", f"GitHub merge request failed with status {response.status_code}"))
+        raise GitHubClientError(msg, status_code=response.status_code)
+    data = response.json()
+    return {
+        "merged": bool(data.get("merged", False)),
+        "message": str(data.get("message", "")),
+        "sha": data.get("sha"),
+    }
 
 
 def _parse_branch_ref(payload: dict[str, Any]) -> GitHubBranchRef:

@@ -22,10 +22,10 @@ class ReviewPipeline:
         self._store = store
         self._github_client = github_client or GitHubClient()
 
-    async def run(self, job: ReviewJob) -> ReviewPipelineResult:
+    async def run(self, job: ReviewJob, config: dict[str, Any] | None = None) -> ReviewPipelineResult:
         """委托 ReviewGraph 执行完整的多 Agent + LLM Review 工作流。"""
         graph = ReviewGraph(self._store, self._github_client)
-        result = await graph.run(job)
+        result = await graph.run(job, config=config)
 
         # SSE 推送文件列表
         included = result.filtered_files.get("included_files", [])

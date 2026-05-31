@@ -215,6 +215,26 @@ export interface ErrorEvent {
   detail?: string;
 }
 
+// ============ Post Comment ============
+export interface PostCommentResponse {
+  comment_id: number;
+  html_url: string;
+}
+
+// ============ Merge PR ============
+export interface MergeRequest {
+  commit_title?: string;
+  commit_message?: string;
+  merge_method?: 'merge' | 'squash' | 'rebase';
+}
+
+export interface MergeResponse {
+  merged: boolean;
+  message: string;
+  sha?: string;
+  html_url?: string;
+}
+
 // ============ Step Display Info ============
 export interface StepInfo {
   key: StepType;

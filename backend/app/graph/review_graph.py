@@ -15,6 +15,7 @@ from app.graph.nodes import (
     node_fetch_pr_async,
     node_parse_diff,
     node_performance_agent,
+    node_rag_context,
     node_report_agent,
     node_risk_judge,
     node_security_agent,
@@ -47,12 +48,12 @@ class ReviewGraphResult:
 _CRITICAL_NODES = {"fetch_pr", "fetch_files"}
 
 _NODE_ORDER = [
-    "fetch_pr", "fetch_files", "diff_filter", "parse_diff", "ast_context",
+    "fetch_pr", "fetch_files", "diff_filter", "parse_diff", "ast_context", "rag_context",
     "summary_agent", "security_agent", "performance_agent", "test_agent",
     "risk_judge", "report_agent",
 ]
 
-_PRE_NODES = ["fetch_pr", "fetch_files", "diff_filter", "parse_diff", "ast_context"]
+_PRE_NODES = ["fetch_pr", "fetch_files", "diff_filter", "parse_diff", "ast_context", "rag_context"]
 _AGENT_NODES = ["summary_agent", "security_agent", "performance_agent", "test_agent"]
 _POST_NODES = ["risk_judge", "report_agent"]
 
@@ -62,6 +63,7 @@ _NODE_DISPLAY: dict[str, tuple[str, str]] = {
     "diff_filter": ("DIFF_FILTER", "正在过滤无意义 Diff"),
     "parse_diff": ("DIFF_PARSE", "正在解析变更行"),
     "ast_context": ("AST_CONTEXT", "正在提取 AST 上下文"),
+    "rag_context": ("RAG_CONTEXT", "正在检索项目知识库相似代码"),
     "summary_agent": ("SUMMARY_AGENT", "Summary Agent 运行中"),
     "security_agent": ("SECURITY_AGENT", "Security Agent 运行中"),
     "performance_agent": ("PERFORMANCE_AGENT", "Performance Agent 运行中"),
@@ -72,7 +74,7 @@ _NODE_DISPLAY: dict[str, tuple[str, str]] = {
 
 _NODE_PERCENT: dict[str, int] = {
     "fetch_pr": 15, "fetch_files": 30, "diff_filter": 45, "parse_diff": 55,
-    "ast_context": 62, "summary_agent": 70, "security_agent": 75,
+    "ast_context": 60, "rag_context": 64, "summary_agent": 70, "security_agent": 75,
     "performance_agent": 80, "test_agent": 85, "risk_judge": 92, "report_agent": 98,
 }
 
@@ -82,9 +84,9 @@ class ReviewGraph:
         self._store = store
         self._github_client = github_client or GitHubClient()
 
-    async def run(self, job: ReviewJob) -> ReviewGraphResult:
+    async def run(self, job: ReviewJob, config: dict[str, Any] | None = None) -> ReviewGraphResult:
         """执行完整的 review graph 工作流。"""
-        state = ReviewGraphState(job_id=job.job_id, pr_url=job.pr_url)
+        state = ReviewGraphState(job_id=job.job_id, pr_url=job.pr_url, config=config or {})
         await self._store.update_status(job.job_id, ReviewJobStatus.running)
         logger.info("[GRAPH] Starting pipeline | job=%s pr_url=%s nodes=%d", job.job_id, job.pr_url, len(_NODE_ORDER))
 
@@ -140,6 +142,7 @@ class ReviewGraph:
         async_dispatch: dict[str, Any] = {
             "fetch_pr": lambda s: node_fetch_pr_async(s, gc, st),
             "fetch_files": lambda s: node_fetch_files_async(s, gc, st),
+            "rag_context": lambda s: node_rag_context(s, gc, st),
             "summary_agent": lambda s: node_summary_agent(s, gc, st),
             "security_agent": lambda s: node_security_agent(s, gc, st),
             "performance_agent": lambda s: node_performance_agent(s, gc, st),

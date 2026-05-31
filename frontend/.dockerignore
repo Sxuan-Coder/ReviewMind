@@ -1,0 +1,21 @@
+# 依赖
+node_modules/
+
+# 构建产物（重新构建）
+dist/
+
+# 环境
+.env
+.env.local
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

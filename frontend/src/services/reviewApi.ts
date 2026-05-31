@@ -3,6 +3,9 @@ import type {
   CreateJobResponse,
   JobDetailResponse,
   JobListResponse,
+  MergeRequest,
+  MergeResponse,
+  PostCommentResponse,
   PullRequestInfo,
 } from '../types';
 
@@ -131,4 +134,40 @@ export async function getPrPreviewFiles(
 
   const result = await response.json();
   return result.data?.files ?? [];
+}
+
+// ============ Review Comment ============
+export async function postReviewComment(
+  jobId: string,
+  commentBody?: string,
+): Promise<PostCommentResponse> {
+  const response = await fetch(`${apiBaseUrl}/review/jobs/${jobId}/comment`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(commentBody ? { comment_body: commentBody } : {}),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.message || '评论发布失败');
+  }
+  const result: ApiResponse<PostCommentResponse> = await response.json();
+  return result.data;
+}
+
+// ============ Merge PR ============
+export async function mergePullRequest(
+  jobId: string,
+  options?: MergeRequest,
+): Promise<MergeResponse> {
+  const response = await fetch(`${apiBaseUrl}/review/jobs/${jobId}/merge`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(options || {}),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.message || 'PR 合并失败');
+  }
+  const result: ApiResponse<MergeResponse> = await response.json();
+  return result.data;
 }

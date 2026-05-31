@@ -1,6 +1,7 @@
 """Review Graph 节点：每个节点读写 ReviewGraphState 的一部分。"""
 
 import asyncio
+import logging
 from typing import Any, Callable, Coroutine
 
 from app.agents import (
@@ -17,11 +18,19 @@ from app.schemas.ast_context import AstContext
 from app.schemas.diff import PullRequestFile
 from app.schemas.github import GitHubPullRequestFile
 from app.services.ast_context import extract_ast_context
+from app.services.code_retriever import CodeRetriever
 from app.services.diff_filter import filter_diff_files
 from app.services.diff_parser import parse_diff_file
 from app.services.github_client import GitHubClient
 from app.services.github_url_parser import parse_github_pr_url
+from app.services.rag_trigger import (
+    RagTriggerLevel,
+    evaluate_rag_trigger,
+    get_risk_file_paths,
+)
 from app.services.review_job_store import ReviewJobStore
+
+logger = logging.getLogger(__name__)
 
 
 def _run_async(coro: Callable[..., Coroutine], *args, **kwargs) -> Any:
@@ -173,6 +182,7 @@ async def node_summary_agent(state: ReviewGraphState, _github_client: GitHubClie
             pr_info=state.pr_info,
             parsed_diff=state.parsed_diff,
             ast_contexts=state.ast_contexts,
+            rag_contexts=state.rag_contexts,
         )
         result = await summary_agent.run_async(ctx)
         state.summary_text = result.summary
@@ -205,6 +215,7 @@ async def node_security_agent(state: ReviewGraphState, _github_client: GitHubCli
             pr_info=state.pr_info,
             parsed_diff=state.parsed_diff,
             ast_contexts=state.ast_contexts,
+            rag_contexts=state.rag_contexts,
         )
         result = await security_agent.run_async(ctx)
         state.agent_results.append(result)
@@ -238,6 +249,7 @@ async def node_performance_agent(state: ReviewGraphState, _github_client: GitHub
             pr_info=state.pr_info,
             parsed_diff=state.parsed_diff,
             ast_contexts=state.ast_contexts,
+            rag_contexts=state.rag_contexts,
         )
         result = await performance_agent.run_async(ctx)
         state.agent_results.append(result)
@@ -270,6 +282,7 @@ async def node_test_agent(state: ReviewGraphState, _github_client: GitHubClient,
             pr_info=state.pr_info,
             parsed_diff=state.parsed_diff,
             ast_contexts=state.ast_contexts,
+            rag_contexts=state.rag_contexts,
         )
         result = await test_agent.run_async(ctx)
         state.agent_results.append(result)
@@ -339,3 +352,131 @@ def _extract_source_from_patch(patch: str) -> str | None:
         elif not line.startswith("-") and not line.startswith("@@") and not line.startswith("---"):
             lines.append(line)
     return "\n".join(lines) if lines else None
+
+
+async def node_rag_context(state: ReviewGraphState, _github_client: GitHubClient, store: ReviewJobStore) -> ReviewGraphState:
+    """节点 5.5：RAG 分级触发 + 语义检索（在 AST 之后、agents 之前执行）。
+
+    非关键节点，失败降级为跳过 RAG。
+    """
+    if state.error:
+        return state
+
+    try:
+        # 1. 读取 enable_rag 配置
+        enable_rag = state.config.get("enable_rag", True)
+        if not enable_rag:
+            state.rag_level = 0
+            state.rag_trigger_reason = "RAG disabled by config"
+            logger.info("[RAG_CONTEXT] Skipped: %s", state.rag_trigger_reason)
+            return state
+
+        # 2. 评估触发级别
+        level, reason = evaluate_rag_trigger(
+            pr_info=state.pr_info,
+            filtered_files=state.filtered_files,
+            parsed_diff=state.parsed_diff,
+            enable_rag=enable_rag,
+        )
+        state.rag_level = level.value
+        state.rag_trigger_reason = reason
+
+        await store.add_progress_event(
+            state.job_id,
+            {"type": "progress", "step": "RAG_CONTEXT", "percent": 64, "message": f"RAG 级别: {level.name} | {reason}"},
+        )
+
+        if level == RagTriggerLevel.NONE:
+            logger.info("[RAG_CONTEXT] Skipped (NONE): %s", reason)
+            return state
+
+        # 3. 提取 repo_url 用于检索
+        repo_url = ""
+        if state.pr_info:
+            owner = state.pr_info.get("owner", "")
+            repo = state.pr_info.get("repo", "")
+            if owner and repo:
+                repo_url = f"https://github.com/{owner}/{repo}"
+
+        if not repo_url:
+            logger.warning("[RAG_CONTEXT] Cannot determine repo_url, skipping")
+            return state
+
+        # 4. 提取查询文本：对每个变更文件取其 patch/AST 代码作为查询
+        from app.core.config import settings as app_settings
+        top_k = app_settings.rag_top_k_light if level == RagTriggerLevel.LIGHT else app_settings.rag_top_k_full
+
+        retriever = CodeRetriever(
+            repo_url=repo_url,
+            top_k=top_k,
+            max_snippet_chars=app_settings.rag_max_snippet_chars,
+            cache_ttl_seconds=app_settings.rag_cache_ttl_seconds,
+        )
+
+        # 收集需要检索的文件路径
+        all_file_paths = [diff.get("file", "") for diff in state.parsed_diff if diff.get("file")]
+        if level == RagTriggerLevel.LIGHT:
+            # 仅对风险文件检索
+            query_files = get_risk_file_paths(all_file_paths)
+            if not query_files:
+                logger.info("[RAG_CONTEXT] LIGHT mode: no risk files found, skipping retrieval")
+                return state
+        else:
+            query_files = all_file_paths
+
+        # 5. 对每个文件执行语义检索
+        all_rag_contexts: list[dict] = []
+        for file_path in query_files[:10]:  # 最多检索 10 个文件
+            # 构建查询：文件路径 + AST symbol
+            query = file_path
+            # 尝试找到对应的 AST context
+            for ctx in state.ast_contexts:
+                if ctx.get("file") == file_path:
+                    symbol = ctx.get("symbol", "")
+                    if symbol:
+                        query = f"{file_path}:{symbol}"
+                    code = ctx.get("code", "")
+                    if code:
+                        query = code[:500]  # 用实际代码作为查询更准确
+                    break
+
+            try:
+                docs = await retriever.aretrieve(query)
+                for doc in docs:
+                    all_rag_contexts.append({
+                        "file_path": doc.metadata.get("file_path", file_path),
+                        "symbol": doc.metadata.get("symbol"),
+                        "language": doc.metadata.get("language", ""),
+                        "code": doc.page_content,
+                        "similarity": doc.metadata.get("similarity", 0),
+                        "query_file": file_path,
+                    })
+            except Exception as exc:
+                logger.warning("[RAG_CONTEXT] Retrieve failed for %s: %s", file_path, exc)
+                continue
+
+        # 按相似度降序排序，去重
+        seen_keys: set[tuple[str, str]] = set()
+        unique_contexts: list[dict] = []
+        for ctx in sorted(all_rag_contexts, key=lambda x: x.get("similarity", 0), reverse=True):
+            key = (ctx["file_path"], ctx.get("symbol") or "")
+            if key not in seen_keys:
+                seen_keys.add(key)
+                unique_contexts.append(ctx)
+
+        state.rag_contexts = unique_contexts
+        logger.info("[RAG_CONTEXT] Retrieved %d unique contexts (level=%s, files=%d)",
+                    len(unique_contexts), level.name, len(query_files))
+
+        await store.add_progress_event(
+            state.job_id,
+            {"type": "progress", "step": "RAG_CONTEXT_DONE", "percent": 65, "message": f"RAG 检索完成: {len(unique_contexts)} 条相似代码"},
+        )
+
+    except Exception as exc:
+        logger.warning("[RAG_CONTEXT] Failed, degrading: %s", exc)
+        state.warnings.append(f"RAG_CONTEXT: {exc}")
+        state.rag_level = 0
+        state.rag_trigger_reason = f"RAG degraded due to error: {exc}"
+
+    return state

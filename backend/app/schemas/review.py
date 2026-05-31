@@ -154,3 +154,16 @@ class PostCommentRequest(BaseModel):
 class PostCommentResponse(BaseModel):
     comment_id: int
     html_url: str
+
+
+class MergeRequest(BaseModel):
+    commit_title: str | None = Field(default=None, description="合并 commit 标题")
+    commit_message: str | None = Field(default=None, description="合并 commit 消息")
+    merge_method: str = Field(default="merge", description="合并方式：merge / squash / rebase")
+
+
+class MergeResponse(BaseModel):
+    merged: bool
+    message: str
+    sha: str | None = None
+    html_url: str | None = None
