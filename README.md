@@ -20,7 +20,10 @@ ReviewMind 是一个面向开发者的 AI PR Review 助手。用户只需输入 
 🎬 **演示视频**：[ReviewMind（心流）— AI 驱动的 PR Review 助手](https://www.bilibili.com/video/BV1yqVU6EERf?vd_source=a14af81dbe58d331448421f880c825c2)
 
 
-Uploading 2026-05-31 21-25-21.mp4…
+
+https://github.com/user-attachments/assets/aeb74279-0767-4173-8caa-71fa41da0d45
+
+
 
 
 
