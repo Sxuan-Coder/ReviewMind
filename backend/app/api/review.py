@@ -87,7 +87,7 @@ async def post_review_comment(job_id: str, request: PostCommentRequest | None = 
 
     try:
         # 优先使用请求体中的 token，其次使用 job 创建时保存的 token
-        job = await review_job_service.get_job(job_id)
+        job = await review_job_store.get(job_id)
         token = (request.github_token if request else None) or job.github_token
         result = await post_pr_comment(
             owner=detail.pr.owner,
@@ -125,7 +125,7 @@ async def merge_pr(job_id: str, request: MergeRequest | None = None) -> ApiRespo
 
     options = request or MergeRequest()
     # 优先使用请求体 token，其次使用 job 创建时保存的 token
-    job = await review_job_service.get_job(job_id)
+    job = await review_job_store.get(job_id)
     token = options.github_token or job.github_token
     merge_client = GitHubClient(token=token) if token else github_client
     try:
