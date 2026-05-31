@@ -1,0 +1,77 @@
+services:
+  # ============ PostgreSQL + pgvector ============
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: reviewmind-postgres
+    environment:
+      POSTGRES_DB: reviewmind
+      POSTGRES_USER: reviewmind
+      POSTGRES_PASSWORD: reviewmind
+    # ports:
+    #   - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reviewmind"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ============ Redis ============
+  redis:
+    image: redis:7-alpine
+    container_name: reviewmind-redis
+    # ports:
+    #   - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # ============ FastAPI 后端 ============
+  backend:
+    image: sxuancoder/reviewmind-backend:latest
+    container_name: reviewmind-backend
+    # ports:
+    #   - "8000:8000"
+    environment:
+      APP_NAME: "ReviewMind API"
+      API_PREFIX: "/api/v1"
+      CORS_ORIGINS: '["http://localhost"]'
+      GITHUB_TOKEN: "你的GitHub_Token"
+      GITHUB_API_BASE_URL: "https://api.github.com"
+      GITHUB_TIMEOUT_SECONDS: "10"
+      LLM_API_KEY: "你的LLM_API_KEY"
+      LLM_API_BASE: "https://ai.sxuan.top/v1"
+      LLM_MODEL_SUMMARY: "glm-5.1"
+      LLM_MODEL_REVIEW: "glm-5.1"
+      LLM_TIMEOUT_SECONDS: "60"
+      LLM_MOCK_MODE: "false"
+      DATABASE_URL: "postgresql+asyncpg://reviewmind:reviewmind@postgres:5432/reviewmind"
+      REDIS_URL: "redis://redis:6379/0"
+      EMBEDDING_API_KEY: "你的Embedding_API_KEY"
+      EMBEDDING_API_BASE: "https://ai.sxuan.top/v1"
+      EMBEDDING_MODEL: "text-embedding-3-small"
+      EMBEDDING_DIMENSIONS: "1536"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ============ React 前端 (nginx) ============
+  frontend:
+    image: sxuancoder/reviewmind-frontend:latest
+    container_name: reviewmind-frontend
+    ports:
+      - "3355:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  pgdata:
