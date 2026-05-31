@@ -30,6 +30,8 @@ from app.services.rag_trigger import (
 )
 from app.services.review_job_store import ReviewJobStore
 
+from app.services.tech_stack_analyzer import analyze_tech_stack
+
 logger = logging.getLogger(__name__)
 
 
@@ -183,6 +185,7 @@ async def node_summary_agent(state: ReviewGraphState, _github_client: GitHubClie
             parsed_diff=state.parsed_diff,
             ast_contexts=state.ast_contexts,
             rag_contexts=state.rag_contexts,
+            tech_stack_prompt=state.tech_stack_prompt,
         )
         result = await summary_agent.run_async(ctx)
         state.summary_text = result.summary
@@ -216,6 +219,7 @@ async def node_security_agent(state: ReviewGraphState, _github_client: GitHubCli
             parsed_diff=state.parsed_diff,
             ast_contexts=state.ast_contexts,
             rag_contexts=state.rag_contexts,
+            tech_stack_prompt=state.tech_stack_prompt,
         )
         result = await security_agent.run_async(ctx)
         state.agent_results.append(result)
@@ -250,6 +254,7 @@ async def node_performance_agent(state: ReviewGraphState, _github_client: GitHub
             parsed_diff=state.parsed_diff,
             ast_contexts=state.ast_contexts,
             rag_contexts=state.rag_contexts,
+            tech_stack_prompt=state.tech_stack_prompt,
         )
         result = await performance_agent.run_async(ctx)
         state.agent_results.append(result)
@@ -283,6 +288,7 @@ async def node_test_agent(state: ReviewGraphState, _github_client: GitHubClient,
             parsed_diff=state.parsed_diff,
             ast_contexts=state.ast_contexts,
             rag_contexts=state.rag_contexts,
+            tech_stack_prompt=state.tech_stack_prompt,
         )
         result = await test_agent.run_async(ctx)
         state.agent_results.append(result)
@@ -480,3 +486,98 @@ async def node_rag_context(state: ReviewGraphState, _github_client: GitHubClient
         state.rag_trigger_reason = f"RAG degraded due to error: {exc}"
 
     return state
+
+
+# ---------------------------------------------------------------------------
+# Tech Stack Analysis — 技术栈推断 → 框架安全上下文
+# ---------------------------------------------------------------------------
+
+def node_tech_stack_analysis(state: ReviewGraphState, _github_client: GitHubClient, _store: ReviewJobStore) -> ReviewGraphState:
+    """节点 5.6：从 changed files 推断技术栈，生成框架安全上下文 prompt。
+
+    在 rag_context 之后、agents 之前执行。
+    非关键节点，失败降级为空 prompt。
+    """
+    if state.error:
+        return state
+    try:
+        profile = analyze_tech_stack(state.github_files)
+        prompt = profile.to_prompt_block()
+        state.tech_stack_prompt = prompt
+        if prompt:
+            logger.info("[TECH_STACK] Detected framework context: %s", prompt[:200])
+        else:
+            logger.info("[TECH_STACK] No framework-specific security context detected")
+    except Exception as exc:
+        logger.warning("[TECH_STACK] Analysis failed, degrading: %s", exc)
+        state.warnings.append(f"TECH_STACK: {exc}")
+    return state
+
+
+# ---------------------------------------------------------------------------
+# Finding Validator — 基于技术栈过滤明显误报
+# ---------------------------------------------------------------------------
+
+# 每条规则：(tech_stack_prompt 中的关键词, finding.type 匹配模式列表, 可选: file 扩展名限制)
+_FALSE_POSITIVE_RULES: list[tuple[str, list[str], list[str] | None]] = [
+    # React JSX 自动转义 → 前端文件中的 XSS 误报
+    ("React", ["xss", "cross-site scripting"], [".tsx", ".jsx", ".js", ".ts"]),
+    # SQLAlchemy ORM 不拼接 SQL → SQL 注入误报
+    ("SQLAlchemy ORM", ["sql_injection", "sql injection", "sqli"], None),
+    # Pydantic 自动类型验证 → 输入校验误报
+    ("Pydantic", ["input_validation", "input validation"], None),
+    # Django 模板自动转义 → XSS 误报
+    ("Django 模板", ["xss", "cross-site scripting"], [".html", ".django"]),
+]
+
+
+def node_finding_validator(state: ReviewGraphState, _github_client: GitHubClient, _store: ReviewJobStore) -> ReviewGraphState:
+    """节点 10.5：基于技术栈上下文，过滤 Agent findings 中的明显误报。
+
+    在所有 Agent 之后、risk_judge 之前执行。
+    只做确定性规则过滤，不做 LLM 调用。
+    """
+    if state.error or not state.tech_stack_prompt:
+        return state
+
+    total_before = 0
+    total_after = 0
+
+    for result in state.agent_results:
+        original = result.findings
+        total_before += len(original)
+        filtered: list[Any] = []
+        for f in original:
+            if _is_false_positive(f, state.tech_stack_prompt):
+                logger.info(
+                    "[FINDING_VALIDATOR] Dropped finding: agent=%s file=%s type=%s desc=%.80s",
+                    f.agent, f.file, f.type, f.description,
+                )
+                continue
+            filtered.append(f)
+        result.findings = filtered
+        total_after += len(filtered)
+
+    dropped = total_before - total_after
+    state.validated_findings_dropped = dropped
+    if dropped > 0:
+        logger.info("[FINDING_VALIDATOR] Dropped %d/%d findings as false positives", dropped, total_before)
+    return state
+
+
+def _is_false_positive(finding: Any, tech_stack_prompt: str) -> bool:
+    """判断单个 finding 是否为基于技术栈的误报。"""
+    fp_type = finding.type.lower()
+    fp_file = finding.file.lower()
+    for keyword, type_patterns, ext_restrictions in _FALSE_POSITIVE_RULES:
+        if keyword.lower() not in tech_stack_prompt.lower():
+            continue
+        # finding.type 是否匹配任一模式
+        if not any(pat in fp_type for pat in type_patterns):
+            continue
+        # 如果有扩展名限制，检查 file 后缀
+        if ext_restrictions is not None:
+            if not any(fp_file.endswith(ext) for ext in ext_restrictions):
+                continue
+        return True
+    return False

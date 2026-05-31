@@ -10,6 +10,7 @@ class AgentContext(BaseModel):
     parsed_diff: list[dict[str, Any]] = Field(default_factory=list)
     ast_contexts: list[dict[str, Any]] = Field(default_factory=list)
     rag_contexts: list[dict[str, Any]] = Field(default_factory=list)
+    tech_stack_prompt: str = ""
 
 
 class AgentFindingsResult(BaseModel):

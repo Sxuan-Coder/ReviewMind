@@ -32,6 +32,10 @@ def build_user_prompt(context: AgentContext) -> str:
     """构建 agent 通用的用户提示。"""
     parts = []
 
+    # 注入框架安全上下文（如果有）
+    if context.tech_stack_prompt:
+        parts.append(context.tech_stack_prompt)
+
     if context.pr_info:
         parts.append(f"PR: {context.pr_info.get('title', 'N/A')}")
         parts.append(f"Author: {context.pr_info.get('author', 'N/A')}")

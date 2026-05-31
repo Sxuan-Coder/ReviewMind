@@ -11,6 +11,7 @@ from typing import Any
 from app.graph.nodes import (
     node_ast_context,
     node_diff_filter,
+    node_finding_validator,
     node_fetch_files_async,
     node_fetch_pr_async,
     node_parse_diff,
@@ -20,6 +21,7 @@ from app.graph.nodes import (
     node_risk_judge,
     node_security_agent,
     node_summary_agent,
+    node_tech_stack_analysis,
     node_test_agent,
 )
 from app.graph.state import ReviewGraphState
@@ -49,13 +51,15 @@ _CRITICAL_NODES = {"fetch_pr", "fetch_files"}
 
 _NODE_ORDER = [
     "fetch_pr", "fetch_files", "diff_filter", "parse_diff", "ast_context", "rag_context",
+    "tech_stack_analysis",
     "summary_agent", "security_agent", "performance_agent", "test_agent",
+    "finding_validator",
     "risk_judge", "report_agent",
 ]
 
-_PRE_NODES = ["fetch_pr", "fetch_files", "diff_filter", "parse_diff", "ast_context", "rag_context"]
+_PRE_NODES = ["fetch_pr", "fetch_files", "diff_filter", "parse_diff", "ast_context", "rag_context", "tech_stack_analysis"]
 _AGENT_NODES = ["summary_agent", "security_agent", "performance_agent", "test_agent"]
-_POST_NODES = ["risk_judge", "report_agent"]
+_POST_NODES = ["finding_validator", "risk_judge", "report_agent"]
 
 _NODE_DISPLAY: dict[str, tuple[str, str]] = {
     "fetch_pr": ("FETCH_PR", "正在拉取 GitHub PR 信息"),
@@ -64,18 +68,22 @@ _NODE_DISPLAY: dict[str, tuple[str, str]] = {
     "parse_diff": ("DIFF_PARSE", "正在解析变更行"),
     "ast_context": ("AST_CONTEXT", "正在提取 AST 上下文"),
     "rag_context": ("RAG_CONTEXT", "正在检索项目知识库相似代码"),
+    "tech_stack_analysis": ("TECH_STACK", "正在分析项目技术栈"),
     "summary_agent": ("SUMMARY_AGENT", "Summary Agent 运行中"),
     "security_agent": ("SECURITY_AGENT", "Security Agent 运行中"),
     "performance_agent": ("PERFORMANCE_AGENT", "Performance Agent 运行中"),
     "test_agent": ("TEST_AGENT", "Test Agent 运行中"),
+    "finding_validator": ("FINDING_VALIDATOR", "正在过滤框架误报"),
     "risk_judge": ("RISK_JUDGE", "风险聚合中"),
     "report_agent": ("REPORT_AGENT", "生成报告中"),
 }
 
 _NODE_PERCENT: dict[str, int] = {
     "fetch_pr": 15, "fetch_files": 30, "diff_filter": 45, "parse_diff": 55,
-    "ast_context": 60, "rag_context": 64, "summary_agent": 70, "security_agent": 75,
-    "performance_agent": 80, "test_agent": 85, "risk_judge": 92, "report_agent": 98,
+    "ast_context": 60, "rag_context": 64, "tech_stack_analysis": 68,
+    "summary_agent": 70, "security_agent": 75,
+    "performance_agent": 80, "test_agent": 85,
+    "finding_validator": 90, "risk_judge": 92, "report_agent": 98,
 }
 
 
@@ -153,6 +161,8 @@ class ReviewGraph:
             "diff_filter": lambda s: _sync(node_diff_filter, s, gc, st),
             "parse_diff": lambda s: _sync(node_parse_diff, s, gc, st),
             "ast_context": lambda s: _sync(node_ast_context, s, gc, st),
+            "tech_stack_analysis": lambda s: _sync(node_tech_stack_analysis, s, gc, st),
+            "finding_validator": lambda s: _sync(node_finding_validator, s, gc, st),
             "report_agent": lambda s: _sync(node_report_agent, s, gc, st),
         }
         if node_name in async_dispatch:
