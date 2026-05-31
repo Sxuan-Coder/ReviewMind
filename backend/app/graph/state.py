@@ -31,12 +31,18 @@ class ReviewGraphState:
     rag_trigger_reason: str = ""           # 触发原因摘要
     rag_contexts: list[dict[str, Any]] = field(default_factory=list)  # 检索到的相似代码
 
+    # tech_stack_analysis 输出
+    tech_stack_prompt: str = ""            # 注入到 agent prompt 的框架上下文
+
     # 审查配置
     config: dict[str, Any] = field(default_factory=dict)
 
     # agents 输出
     summary_text: str = ""
     agent_results: list[Any] = field(default_factory=list)
+
+    # finding_validator 输出：经规则过滤后的 finding 数量
+    validated_findings_dropped: int = 0
 
     # risk_judge 输出
     aggregated_risk: AggregatedRisk | None = None
