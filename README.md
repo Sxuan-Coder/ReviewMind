@@ -84,12 +84,48 @@ http://localhost:5173
 
 ## Docker Compose 启动
 
+### 方式一：使用预构建镜像（推荐）
+
 ```bash
-docker-compose up --build
+# 1. 复制并配置环境变量
+cp backend/.env.example backend/.env
+# 编辑 backend/.env 填入你的 GITHUB_TOKEN 等配置
+
+# 2. 启动服务
+docker-compose up -d
 ```
 
-后端：http://localhost:8000
-前端：http://localhost:5173
+首次启动后，可通过以下命令更新到最新镜像：
+
+```bash
+docker-compose pull && docker-compose up -d
+```
+
+### 方式二：本地构建
+
+```bash
+docker-compose up --build -d
+```
+
+### 服务地址
+
+| 服务 | 地址 |
+|------|------|
+| 前端 | http://localhost:80 |
+| 后端 API | http://localhost:8000 |
+| API 文档 | http://localhost:8000/docs |
+
+### 环境变量配置
+
+可通过 `backend/.env` 文件或环境变量覆盖默认配置：
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `POSTGRES_DB` | reviewmind | 数据库名 |
+| `POSTGRES_PORT` | 5432 | PostgreSQL 端口 |
+| `BACKEND_PORT` | 8000 | 后端 API 端口 |
+| `FRONTEND_PORT` | 80 | 前端访问端口 |
+| `REDIS_PASSWORD` | (空) | Redis 密码 |
 
 ## 原创性声明
 
