@@ -29,20 +29,22 @@ async def post_pr_comment(
     repo: str,
     pull_number: int,
     body: str,
+    github_token: str | None = None,
 ) -> GitHubCommentResult:
     """在指定 PR 上发布评论。
 
     调用 POST /repos/{owner}/{repo}/issues/{number}/comments。
     需要 GITHUB_TOKEN 具备 repo 权限。
     """
-    if not settings.github_token:
+    token = github_token or settings.github_token
+    if not token:
         raise GitHubCommentError("GITHUB_TOKEN is not configured")
 
     url = f"{settings.github_api_base_url}/repos/{owner}/{repo}/issues/{pull_number}/comments"
     headers = {
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
-        "Authorization": f"Bearer {settings.github_token}",
+        "Authorization": f"Bearer {token}",
     }
     payload = {"body": body}
 

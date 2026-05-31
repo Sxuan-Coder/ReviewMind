@@ -56,7 +56,7 @@ class ReviewJobService:
 
     async def create_job(self, request: CreateReviewJobRequest) -> CreateReviewJobResponse:
         job_id = f"rev_{uuid4().hex[:8]}"
-        job = ReviewJob(job_id=job_id, pr_url=str(request.pr_url))
+        job = ReviewJob(job_id=job_id, pr_url=str(request.pr_url), github_token=request.github_token)
         eq = asyncio.Queue(maxsize=256)
         event_queue_registry.register(job_id, eq)
         job.event_queue = eq
@@ -65,12 +65,13 @@ class ReviewJobService:
             job_id,
             {"step": "JOB_CREATED", "percent": 0, "message": "Review Job 已创建"},
         )
-        # 提取 config 用于 pipeline
+        # 提取 config 用于 pipeline，同时传入用户 token
         config = request.config.model_dump() if request.config else {}
+        github_token = request.github_token
         if self._task_runner is not None:
-            await self._task_runner.submit(job, lambda j: self._pipeline.run(j, config=config))
+            await self._task_runner.submit(job, lambda j: self._pipeline.run(j, config=config, github_token=github_token))
         else:
-            asyncio.create_task(self._pipeline.run(job, config=config))
+            asyncio.create_task(self._pipeline.run(job, config=config, github_token=github_token))
 
         return CreateReviewJobResponse(
             job_id=job_id,

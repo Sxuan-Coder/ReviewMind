@@ -86,11 +86,15 @@ async def post_review_comment(job_id: str, request: PostCommentRequest | None = 
         return success_response(None, message="No comment content to post", code=40000)
 
     try:
+        # 优先使用请求体中的 token，其次使用 job 创建时保存的 token
+        job = await review_job_service.get_job(job_id)
+        token = (request.github_token if request else None) or job.github_token
         result = await post_pr_comment(
             owner=detail.pr.owner,
             repo=detail.pr.repo,
             pull_number=detail.pr.number,
             body=comment_body,
+            github_token=token,
         )
     except GitHubCommentError as exc:
         return success_response(None, message=str(exc), code=50000)
@@ -120,8 +124,12 @@ async def merge_pr(job_id: str, request: MergeRequest | None = None) -> ApiRespo
     )
 
     options = request or MergeRequest()
+    # 优先使用请求体 token，其次使用 job 创建时保存的 token
+    job = await review_job_service.get_job(job_id)
+    token = options.github_token or job.github_token
+    merge_client = GitHubClient(token=token) if token else github_client
     try:
-        result = await github_client.merge_pull_request(
+        result = await merge_client.merge_pull_request(
             pr_ref,
             commit_title=options.commit_title,
             commit_message=options.commit_message,
@@ -317,8 +325,11 @@ async def pr_preview(body: dict) -> ApiResponse[dict]:
         ref = parse_github_pr_url(pr_url)
     except GitHubPullRequestUrlError as exc:
         return success_response(None, message=str(exc), code=40001)
-    pr_info = await github_client.fetch_pull_request(ref)
-    files = await github_client.fetch_pull_request_files(ref)
+    # 用户可传入自定义 token，不传则使用服务器默认
+    user_token = body.get("github_token")
+    client = GitHubClient(token=user_token) if user_token else github_client
+    pr_info = await client.fetch_pull_request(ref)
+    files = await client.fetch_pull_request_files(ref)
     pr_data = {
         "owner": pr_info.owner,
         "repo": pr_info.repo,

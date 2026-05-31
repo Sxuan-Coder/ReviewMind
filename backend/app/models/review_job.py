@@ -24,6 +24,8 @@ class ReviewJob:
     pr_info: dict[str, Any] | None = None
     # SSE 实时推送队列（非 dataclass field，在 create_job 时注入）
     event_queue: Any = field(default=None, repr=False, compare=False)
+    # 用户自定义 GitHub Token（仅内存存储，不落库）
+    github_token: str | None = field(default=None, repr=False, compare=False)
 
     def mark_updated(self) -> None:
         self.updated_at = datetime.now(UTC)

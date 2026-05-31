@@ -22,9 +22,10 @@ class ReviewPipeline:
         self._store = store
         self._github_client = github_client or GitHubClient()
 
-    async def run(self, job: ReviewJob, config: dict[str, Any] | None = None) -> ReviewPipelineResult:
+    async def run(self, job: ReviewJob, config: dict[str, Any] | None = None, github_token: str | None = None) -> ReviewPipelineResult:
         """委托 ReviewGraph 执行完整的多 Agent + LLM Review 工作流。"""
-        graph = ReviewGraph(self._store, self._github_client)
+        client = GitHubClient(token=github_token) if github_token else self._github_client
+        graph = ReviewGraph(self._store, client)
         result = await graph.run(job, config=config)
 
         # SSE 推送文件列表
