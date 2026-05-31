@@ -22,6 +22,7 @@ class ReviewConfig(BaseModel):
 class CreateReviewJobRequest(BaseModel):
     pr_url: HttpUrl = Field(description="GitHub Pull Request URL")
     config: ReviewConfig = Field(default_factory=ReviewConfig)
+    github_token: str | None = Field(default=None, description="用户自定义 GitHub Token，不传则使用服务器默认配置")
 
 
 class CreateReviewJobResponse(BaseModel):
@@ -149,6 +150,7 @@ class JobListResponse(BaseModel):
 
 class PostCommentRequest(BaseModel):
     comment_body: str | None = Field(default=None, description="自定义评论内容，不传则使用 report.review_comment")
+    github_token: str | None = Field(default=None, description="用户自定义 GitHub Token")
 
 
 class PostCommentResponse(BaseModel):
@@ -160,6 +162,7 @@ class MergeRequest(BaseModel):
     commit_title: str | None = Field(default=None, description="合并 commit 标题")
     commit_message: str | None = Field(default=None, description="合并 commit 消息")
     merge_method: str = Field(default="merge", description="合并方式：merge / squash / rebase")
+    github_token: str | None = Field(default=None, description="用户自定义 GitHub Token")
 
 
 class MergeResponse(BaseModel):

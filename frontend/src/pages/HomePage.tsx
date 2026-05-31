@@ -1,13 +1,15 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Zap, Brain, FileText, GitPullRequest, Loader2, Search, ExternalLink, RefreshCw } from 'lucide-react';
+import { Zap, Brain, FileText, GitPullRequest, Loader2, Search, ExternalLink, RefreshCw, KeyRound, ChevronDown, Eye, EyeOff } from 'lucide-react';
 import { createReviewJob, getJobList, getPrPreview, parsePrUrl, getHealth } from '../services/reviewApi';
 import { useReviewStore } from '../store/reviewStore';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import type { PullRequestInfo, JobListItem } from '../types';
+
+const TOKEN_STORAGE_KEY = 'reviewmind_github_token';
 
 export function HomePage() {
   const [prUrl, setPrUrl] = useState('');
@@ -22,8 +24,18 @@ export function HomePage() {
   const [history, setHistory] = useState<JobListItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
 
+  const [githubToken, setGithubToken] = useState(() => localStorage.getItem(TOKEN_STORAGE_KEY) || '');
+  const [showTokenInput, setShowTokenInput] = useState(false);
+  const [showToken, setShowToken] = useState(false);
+
   const navigate = useNavigate();
   const storeSetJob = useReviewStore((s) => s.setJob);
+
+  const saveToken = useCallback((value: string) => {
+    setGithubToken(value);
+    if (value.trim()) localStorage.setItem(TOKEN_STORAGE_KEY, value.trim());
+    else localStorage.removeItem(TOKEN_STORAGE_KEY);
+  }, []);
 
   useEffect(() => {
     getHealth()
@@ -48,7 +60,7 @@ export function HomePage() {
     setPreviewLoading(true);
     try {
       await parsePrUrl(prUrl.trim());
-      const info = await getPrPreview(prUrl.trim());
+      const info = await getPrPreview(prUrl.trim(), githubToken.trim() || undefined);
       setPreview(info);
     } catch (err) {
       setError(err instanceof Error ? err.message : '获取 PR 信息失败');
@@ -71,6 +83,7 @@ export function HomePage() {
       const job = await createReviewJob({
         pr_url: prUrl.trim(),
         config: { enable_ast: true, enable_rag: true, strict_mode: true },
+        github_token: githubToken.trim() || undefined,
       });
       storeSetJob(job);
       navigate(`/analysis/${job.job_id}`);
@@ -152,6 +165,63 @@ export function HomePage() {
               )}
             </Button>
           </form>
+
+          {/* GitHub Token 可选输入 */}
+          <div className="mt-3">
+            <button
+              type="button"
+              onClick={() => setShowTokenInput((v) => !v)}
+              className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+            >
+              <KeyRound className="size-3" />
+              <span>自定义 GitHub Token（可选）</span>
+              <ChevronDown className={`size-3 transition-transform ${showTokenInput ? 'rotate-180' : ''}`} />
+            </button>
+            <AnimatePresence>
+              {showTokenInput && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="overflow-hidden"
+                >
+                  <div className="flex items-center gap-2 mt-2">
+                    <div className="relative flex-1">
+                      <Input
+                        aria-label="GitHub Token"
+                        type={showToken ? 'text' : 'password'}
+                        placeholder="ghp_xxxx... 留空则使用服务器默认配置"
+                        value={githubToken}
+                        onChange={(e) => saveToken(e.target.value)}
+                        className="h-9 rounded-lg border-zinc-800/60 bg-zinc-950/70 text-foreground placeholder:text-muted-foreground/40 px-3 pr-9 text-xs font-mono"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowToken((v) => !v)}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-600 hover:text-zinc-400 transition-colors"
+                      >
+                        {showToken ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+                      </button>
+                    </div>
+                    {githubToken && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => saveToken('')}
+                        className="text-xs text-zinc-500 hover:text-red-400 h-9 px-2 shrink-0"
+                      >
+                        清除
+                      </Button>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-zinc-600 mt-1.5">
+                    Token 仅在浏览器本地存储，用于访问私有仓库或提升 API 限额。不填则使用服务器端默认 Token。
+                  </p>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
 
           {error && <div className="error-text">{error}</div>}
 

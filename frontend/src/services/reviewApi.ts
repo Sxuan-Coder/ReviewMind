@@ -26,6 +26,7 @@ export interface CreateJobParams {
     enable_rag?: boolean;
     strict_mode?: boolean;
   };
+  github_token?: string;
 }
 
 export async function createReviewJob(
@@ -106,11 +107,11 @@ export async function parsePrUrl(
   return result.data;
 }
 
-export async function getPrPreview(prUrl: string): Promise<PullRequestInfo> {
+export async function getPrPreview(prUrl: string, githubToken?: string): Promise<PullRequestInfo> {
   const response = await fetch(`${apiBaseUrl}/github/pr-preview`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pr_url: prUrl }),
+    body: JSON.stringify({ pr_url: prUrl, github_token: githubToken || undefined }),
   });
   if (!response.ok) {
     throw new Error('PR 预览获取失败');
@@ -122,11 +123,12 @@ export async function getPrPreview(prUrl: string): Promise<PullRequestInfo> {
 
 export async function getPrPreviewFiles(
   prUrl: string,
+  githubToken?: string,
 ): Promise<{ filename: string; patch?: string | null }[]> {
   const response = await fetch(`${apiBaseUrl}/github/pr-preview`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pr_url: prUrl }),
+    body: JSON.stringify({ pr_url: prUrl, github_token: githubToken || undefined }),
   });
   if (!response.ok) {
     throw new Error('PR 文件预览获取失败');
@@ -140,11 +142,15 @@ export async function getPrPreviewFiles(
 export async function postReviewComment(
   jobId: string,
   commentBody?: string,
+  githubToken?: string,
 ): Promise<PostCommentResponse> {
   const response = await fetch(`${apiBaseUrl}/review/jobs/${jobId}/comment`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(commentBody ? { comment_body: commentBody } : {}),
+    body: JSON.stringify({
+      ...(commentBody ? { comment_body: commentBody } : {}),
+      github_token: githubToken || undefined,
+    }),
   });
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));

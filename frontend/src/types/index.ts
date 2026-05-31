@@ -226,6 +226,7 @@ export interface MergeRequest {
   commit_title?: string;
   commit_message?: string;
   merge_method?: 'merge' | 'squash' | 'rebase';
+  github_token?: string;
 }
 
 export interface MergeResponse {
