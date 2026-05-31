@@ -73,6 +73,7 @@ export function ReportPage() {
   const [loading, setLoading] = useState(!detail);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState('overview');
+  const [summaryExpanded, setSummaryExpanded] = useState(false);
   const [expandedFindings, setExpandedFindings] = useState<Set<string>>(new Set());
 
   const [diffFile, setDiffFile] = useState<ChangedFile | null>(null);
@@ -498,7 +499,22 @@ export function ReportPage() {
                 <div className="space-y-6">
                   <div>
                     <h3 className="section-label mb-3">PR 摘要</h3>
-                    <p className="report-summary">{report.summary}</p>
+                    {report.summary.length > 200 && !summaryExpanded ? (
+                      <>
+                        <p className="report-summary">
+                          {report.summary.slice(0, 200)}…
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => setSummaryExpanded(true)}
+                          className="mt-2 text-xs text-sky-400/80 hover:text-sky-300 transition-colors"
+                        >
+                          展开全文
+                        </button>
+                      </>
+                    ) : (
+                      <p className="report-summary">{report.summary}</p>
+                    )}
                   </div>
 
                   {report.changed_symbols && report.changed_symbols.length > 0 && (
