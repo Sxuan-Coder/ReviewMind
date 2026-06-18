@@ -58,8 +58,13 @@ async def post_pr_comment(
     if response.status_code == 404:
         raise GitHubCommentError("GitHub pull request was not found", status_code=404)
     if response.status_code >= 400:
+        message = response.text
+        try:
+            message = str(response.json().get("message", message))
+        except Exception:
+            pass
         raise GitHubCommentError(
-            f"GitHub comment API failed: {response.status_code}", status_code=response.status_code
+            f"GitHub comment API failed: {response.status_code} {message}", status_code=response.status_code
         )
 
     data = response.json()

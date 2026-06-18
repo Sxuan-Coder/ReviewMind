@@ -8,6 +8,12 @@ class Settings(BaseSettings):
     github_token: str | None = None
     github_api_base_url: str = "https://api.github.com"
     github_timeout_seconds: float = 10.0
+    github_webhook_secret: str | None = None
+    github_review_trigger: str = "@reviewmind review"
+    github_bot_login: str = "reviewmind"
+    github_allowed_repos: list[str] = []
+    github_webhook_result_timeout_seconds: int = 1800
+    github_webhook_result_poll_seconds: float = 2.0
 
     llm_api_key: str | None = None
     llm_api_base: str = "https://ai.sxuan.top/v1"
