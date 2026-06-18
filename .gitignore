@@ -33,3 +33,6 @@ ui/
 .claude
 docs/review-pipeline-optimization.md
 *.db
+*.md
+*.jsonl
+docs/

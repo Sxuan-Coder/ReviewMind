@@ -173,9 +173,9 @@ export function ReportPage() {
     setHighlightLine(finding.line);
     setActiveTab('diff');
     setTimeout(() => {
-      const el = diffContainerRef.current?.querySelector(`[data-line="${finding.line}"]`);
-      const scroller = el?.closest('[data-diff-scroll]') as HTMLElement | null;
-      if (el instanceof HTMLElement && scroller) {
+      const scroller = diffContainerRef.current?.querySelector('[data-diff-scroll]') as HTMLElement | null;
+      const el = scroller?.querySelector(`[data-line="${finding.line}"]`) as HTMLElement | null;
+      if (el && scroller) {
         scroller.scrollTop = Math.max(
           el.offsetTop - scroller.clientHeight / 2 + el.clientHeight / 2,
           0,
@@ -247,11 +247,11 @@ export function ReportPage() {
     }
 
     if (file.old_code && file.new_code) {
-      return renderSideBySideDiff(file.old_code, file.new_code, file.filename);
+      return renderSideBySideDiff(file.old_code, file.new_code, file.filename, highlightLine);
     }
 
     if (file.patch) {
-      return renderPatchView(file.patch);
+      return renderPatchView(file.patch, highlightLine);
     }
 
     return <p className="text-zinc-600 text-center py-8">该文件暂无 Diff 数据</p>;
@@ -660,7 +660,101 @@ export function ReportPage() {
 
 // ============ Inline Diff Renderers ============
 
-function renderSideBySideDiff(oldCode: string, newCode: string, filename: string) {
+/** Patch 解析：将 unified diff 解析为带真实行号的可视行 */
+interface PatchLine {
+  text: string;
+  lineNum: number | null; // 新文件行号（null = hunk header / 文件头 / 删除行）
+  kind: 'add' | 'del' | 'hunk' | 'ctx' | 'meta' | 'empty';
+}
+
+function parsePatchLines(patch: string): PatchLine[] {
+  const rawLines = patch.split('\n');
+  const result: PatchLine[] = [];
+  let currentLine = 0;
+
+  for (const raw of rawLines) {
+    if (raw.startsWith('@@')) {
+      // @@ -oldStart,oldCount +newStart,newCount @@
+      const m = raw.match(/\+(\d+)/);
+      currentLine = m ? parseInt(m[1], 10) : 0;
+      result.push({ text: raw, lineNum: null, kind: 'hunk' });
+      continue;
+    }
+    if (raw.startsWith('+++') || raw.startsWith('---')) {
+      result.push({ text: raw, lineNum: null, kind: 'meta' });
+      continue;
+    }
+    if (raw.length === 0) {
+      result.push({ text: '', lineNum: null, kind: 'empty' });
+      continue;
+    }
+    if (raw.startsWith('+')) {
+      result.push({ text: raw, lineNum: currentLine, kind: 'add' });
+      currentLine++;
+    } else if (raw.startsWith('-')) {
+      // 删除行不占新文件行号，标记为 null
+      result.push({ text: raw, lineNum: null, kind: 'del' });
+    } else {
+      // 上下文行
+      result.push({ text: raw, lineNum: currentLine, kind: 'ctx' });
+      currentLine++;
+    }
+  }
+  return result;
+}
+
+function renderPatchView(patch: string, highlightLine: number | null) {
+  const patchLines = parsePatchLines(patch);
+
+  return (
+    <div data-diff-scroll className="overflow-auto max-h-[70vh] font-mono text-xs leading-5">
+      <table className="w-full border-collapse">
+        <thead>
+          <tr className="bg-zinc-900/80 text-zinc-500 sticky top-0 z-10">
+            <th className="w-12 px-2 py-1.5 text-right border-r border-zinc-800/40">行</th>
+            <th className="px-3 py-1.5 text-left">内容</th>
+          </tr>
+        </thead>
+        <tbody>
+          {patchLines.map((pl, i) => {
+            const isHighlighted = pl.lineNum !== null && pl.lineNum === highlightLine;
+            return (
+              <tr
+                key={i}
+                data-line={pl.lineNum ?? undefined}
+                className={cn(
+                  'border-b border-zinc-900/50',
+                  pl.kind === 'add' && 'bg-emerald-950/20',
+                  pl.kind === 'del' && 'bg-red-950/20',
+                  pl.kind === 'hunk' && 'bg-sky-950/10',
+                  isHighlighted && 'ring-1 ring-inset ring-amber-400/60 bg-amber-950/30',
+                )}
+              >
+                <td className="w-12 px-2 py-px text-right text-zinc-700 border-r border-zinc-800/40 select-none">
+                  {pl.lineNum ?? ''}
+                </td>
+                <td
+                  className={cn(
+                    'px-3 py-px whitespace-pre',
+                    pl.kind === 'add' && 'text-emerald-400/80',
+                    pl.kind === 'del' && 'text-red-400/80',
+                    pl.kind === 'hunk' && 'text-sky-400/80',
+                    pl.kind === 'ctx' && 'text-zinc-400',
+                    pl.kind === 'empty' && 'h-4',
+                  )}
+                >
+                  {pl.text || ' '}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function renderSideBySideDiff(oldCode: string, newCode: string, _filename: string, highlightLine: number | null) {
   const oldLines = oldCode.split('\n');
   const newLines = newCode.split('\n');
 
@@ -678,75 +772,51 @@ function renderSideBySideDiff(oldCode: string, newCode: string, filename: string
           </tr>
         </thead>
         <tbody>
-          {diffRows.map((row, i) => (
-            <tr
-              key={i}
-              className={cn(
-                'border-b border-zinc-900/50',
-                row.type === 'add' && 'bg-emerald-950/10',
-                row.type === 'remove' && 'bg-red-950/10',
-              )}
-            >
-              <td className="w-12 px-2 py-0.5 text-right text-zinc-700 border-r border-zinc-800/40 select-none">
-                {row.type !== 'add' ? row.oldLine : ''}
-              </td>
-              <td
+          {diffRows.map((row, i) => {
+            // data-line 放在 tr 上，优先用 newLine（Finding.line 通常指向新文件行号）
+            const dataLine = row.newLine || row.oldLine || undefined;
+            const isHighlighted = highlightLine !== null &&
+              (row.newLine === highlightLine || row.oldLine === highlightLine);
+            return (
+              <tr
+                key={i}
+                data-line={dataLine}
                 className={cn(
-                  'px-3 py-0.5 border-r border-zinc-800/40 whitespace-pre-wrap',
-                  row.type === 'remove' ? 'text-red-400/80 bg-red-950/10' : 'text-zinc-500',
+                  'border-b border-zinc-900/50',
+                  row.type === 'add' && 'bg-emerald-950/10',
+                  row.type === 'remove' && 'bg-red-950/10',
+                  isHighlighted && 'ring-1 ring-inset ring-amber-400/60 bg-amber-950/30',
                 )}
-                data-line={row.oldLine}
               >
-                {row.type === 'remove' && <span className="select-none mr-2 text-red-600">-</span>}
-                {row.type !== 'add' ? row.content : ''}
-              </td>
-              <td className="w-12 px-2 py-0.5 text-right text-zinc-700 border-r border-zinc-800/40 select-none">
-                {row.type !== 'remove' ? row.newLine : ''}
-              </td>
-              <td
-                className={cn(
-                  'px-3 py-0.5 whitespace-pre-wrap',
-                  row.type === 'add' ? 'text-emerald-400/80 bg-emerald-950/10' : 'text-zinc-300',
-                )}
-                data-line={row.newLine}
-              >
-                {row.type === 'add' && <span className="select-none mr-2 text-emerald-600">+</span>}
-                {row.type !== 'remove' ? row.content : ''}
-              </td>
-            </tr>
-          ))}
+                <td className="w-12 px-2 py-0.5 text-right text-zinc-700 border-r border-zinc-800/40 select-none">
+                  {row.type !== 'add' ? row.oldLine : ''}
+                </td>
+                <td
+                  className={cn(
+                    'px-3 py-0.5 border-r border-zinc-800/40 whitespace-pre-wrap',
+                    row.type === 'remove' ? 'text-red-400/80 bg-red-950/10' : 'text-zinc-500',
+                  )}
+                >
+                  {row.type === 'remove' && <span className="select-none mr-2 text-red-600">-</span>}
+                  {row.type !== 'add' ? row.content : ''}
+                </td>
+                <td className="w-12 px-2 py-0.5 text-right text-zinc-700 border-r border-zinc-800/40 select-none">
+                  {row.type !== 'remove' ? row.newLine : ''}
+                </td>
+                <td
+                  className={cn(
+                    'px-3 py-0.5 whitespace-pre-wrap',
+                    row.type === 'add' ? 'text-emerald-400/80 bg-emerald-950/10' : 'text-zinc-300',
+                  )}
+                >
+                  {row.type === 'add' && <span className="select-none mr-2 text-emerald-600">+</span>}
+                  {row.type !== 'remove' ? row.content : ''}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
-    </div>
-  );
-}
-
-function renderPatchView(patch: string) {
-  const lines = patch.split('\n');
-  return (
-    <div data-diff-scroll className="overflow-auto max-h-[70vh] p-3 font-mono text-xs leading-5">
-      {lines.map((line, i) => {
-        const isAdd = line.startsWith('+') && !line.startsWith('+++');
-        const isDel = line.startsWith('-') && !line.startsWith('---');
-        const isHunk = line.startsWith('@@');
-        const isEmpty = line.length === 0;
-        return (
-          <div
-            key={i}
-            data-line={i + 1}
-            className={cn(
-              'whitespace-pre py-px',
-              isAdd && 'text-emerald-400/80 bg-emerald-950/20',
-              isDel && 'text-red-400/80 bg-red-950/20',
-              isHunk && 'text-sky-400/80 bg-sky-950/10',
-              !isAdd && !isDel && !isHunk && !isEmpty && 'text-zinc-400',
-              isEmpty && 'h-4',
-            )}
-          >
-            {line || ' '}
-          </div>
-        );
-      })}
     </div>
   );
 }

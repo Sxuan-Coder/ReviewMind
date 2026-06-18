@@ -23,7 +23,7 @@ async def run_async(context: AgentContext) -> AgentFindingsResult:
                 {"role": "user", "content": build_user_prompt(context)},
             ]
             logger.info("[PERF_AGENT] Calling LLM... files=%d", len(context.parsed_diff))
-            raw = await llm_client.chat(messages, model=None, temperature=0.1)
+            raw = await llm_client.chat(messages, model=None, temperature=0.0)
             parsed = try_parse_json(raw)
             findings = [
                 ReviewFinding(

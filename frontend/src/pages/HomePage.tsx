@@ -107,6 +107,10 @@ export function HomePage() {
   }, []);
 
   useEffect(() => {
+    loadHistory();
+  }, [loadHistory]);
+
+  useEffect(() => {
     setPreview(null);
   }, [prUrl]);
 
@@ -262,8 +266,8 @@ export function HomePage() {
         </div>
       </section>
 
-      <div className="mt-8 grid grid-cols-1 lg:grid-cols-3 gap-5">
-        <section className="lg:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="mt-8 grid grid-cols-1 lg:grid-cols-3 gap-5 items-start">
+        <section className="lg:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-4 self-start">
           {features.map((item) => (
             <div
               key={item.title}
