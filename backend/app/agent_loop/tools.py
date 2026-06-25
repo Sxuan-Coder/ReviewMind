@@ -30,11 +30,16 @@ logger = logging.getLogger(__name__)
 
 
 class ToolCall(BaseModel):
-    """LLM 发起的一次工具调用。"""
+    """LLM 发起的一次工具调用。
+
+    ``id`` 承载 OpenAI 原生 ``tool_call_id``，多轮回灌时必需
+    （回灌 ``role:"tool"`` 消息时必须带上对应的 tool_call_id）。
+    文本解析兜底路径下 id 可能为空。
+    """
 
     name: str
-    # 参数可能是 LLM 返回的 dict，也可能是空 dict
     arguments: dict[str, Any] = Field(default_factory=dict)
+    id: str = ""
 
 
 class ToolResult(BaseModel):

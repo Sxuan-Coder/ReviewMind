@@ -1,4 +1,4 @@
-"""Tests for PlannerAgent：ReAct 循环产出审查计划。"""
+"""Tests for PlannerAgent：原生 Function Calling ReAct 循环产出审查计划。"""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import pytest
 
 from app.agent_loop.planner import PlannerAgent
 from app.agent_loop.schemas import ContextSnapshot, ReviewDimension
+from app.core.llm import ToolCallItem, ToolCallResponse
 
 
 def _make_snapshot() -> ContextSnapshot:
@@ -22,19 +23,31 @@ def _make_snapshot() -> ContextSnapshot:
 
 
 class FakeLLMClient:
-    """按预设队列返回文本的伪 LLM。"""
+    """伪 LLM：按队列返回原生 ToolCallResponse。"""
 
-    def __init__(self, responses: list[str]) -> None:
+    def __init__(self, responses: list[ToolCallResponse]) -> None:
         self._responses = list(responses)
 
-    async def chat(self, messages, *, model=None, temperature=0.1, **kwargs):  # noqa: ARG002
+    async def chat_with_tools(self, messages, *, tools, model=None, temperature=0.1, tool_choice="auto"):  # noqa: ARG002
         if not self._responses:
-            return "FINAL_ANSWER: {}"
+            return ToolCallResponse(content="{}", tool_calls=[], finish_reason="stop")
         return self._responses.pop(0)
 
 
+def _tool_call_resp(name, arguments=None, call_id="call_1") -> ToolCallResponse:
+    return ToolCallResponse(
+        content=None,
+        tool_calls=[ToolCallItem(id=call_id, name=name, arguments=arguments or {})],
+        finish_reason="tool_calls",
+    )
+
+
+def _final_resp(text: str) -> ToolCallResponse:
+    return ToolCallResponse(content=text, tool_calls=[], finish_reason="stop")
+
+
 # ---------------------------------------------------------------------------
-# 正常路径：LLM 直接给出最终计划（无需工具调用）
+# 正常路径：LLM 直接给出最终计划（无工具调用）
 # ---------------------------------------------------------------------------
 
 
@@ -43,8 +56,8 @@ async def test_planner_parses_minimal_plan():
     """LLM 直接产出只含 summary 的计划 → 正确解析。"""
     snap = _make_snapshot()
     fake = FakeLLMClient([
-        'FINAL_ANSWER: {"dimensions": [{"dimension": "summary", "use_rag": false, '
-        '"rationale": "仅文档改动"}], "overall_risk_hint": "LOW", "reasoning": "doc-only"}'
+        _final_resp('{"dimensions": [{"dimension": "summary", "use_rag": false, '
+        '"rationale": "仅文档改动"}], "overall_risk_hint": "LOW", "reasoning": "doc-only"}')
     ])
     planner = PlannerAgent(snap, client=fake, max_steps=3)
     plan = await planner.plan()
@@ -55,13 +68,13 @@ async def test_planner_parses_minimal_plan():
 
 
 @pytest.mark.asyncio
-async def test_planner_parses_multi_dimension_plan():
-    """LLM 产出多维度计划 → 全部解析。"""
+async def test_planner_parses_plan_from_markdown_block():
+    """LLM 把 JSON 包在代码块里 → 仍能解析。"""
     snap = _make_snapshot()
     fake = FakeLLMClient([
-        'FINAL_ANSWER: ```json\n{"dimensions": ['
+        _final_resp('```json\n{"dimensions": ['
         '{"dimension": "summary"}, {"dimension": "security"}, {"dimension": "performance"}'
-        '], "overall_risk_hint": "HIGH"}\n```'
+        '], "overall_risk_hint": "HIGH"}\n```')
     ])
     planner = PlannerAgent(snap, client=fake, max_steps=3)
     plan = await planner.plan()
@@ -70,21 +83,38 @@ async def test_planner_parses_multi_dimension_plan():
 
 
 # ---------------------------------------------------------------------------
-# 工具调用路径：LLM 先调工具再给最终计划
+# 工具调用路径：LLM 先用原生 tool_calls 调工具，再给最终计划
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_planner_executes_tool_then_finalizes():
-    """LLM 先调 get_pr_overview，拿到观察后再产出计划。"""
+    """LLM 先调 get_pr_overview（原生 tool_calls），拿到观察后再产出计划。"""
     snap = _make_snapshot()
     fake = FakeLLMClient([
-        '让我先看看 PR 概览。TOOL_CALL: {"name": "get_pr_overview", "arguments": {}}',
-        'FINAL_ANSWER: {"dimensions": [{"dimension": "summary"}], "overall_risk_hint": "LOW"}',
+        _tool_call_resp("get_pr_overview", {}, call_id="call_overview"),
+        _final_resp('{"dimensions": [{"dimension": "summary"}], "overall_risk_hint": "LOW"}'),
     ])
     planner = PlannerAgent(snap, client=fake, max_steps=4)
     plan = await planner.plan()
     assert [d.dimension for d in plan.dimensions] == [ReviewDimension.SUMMARY]
+
+
+@pytest.mark.asyncio
+async def test_planner_multi_turn_tool_calls():
+    """LLM 连续调用多个工具，每次都正确回灌 tool_call_id。"""
+    snap = _make_snapshot()
+    fake = FakeLLMClient([
+        _tool_call_resp("get_pr_overview", {}, call_id="c1"),
+        _tool_call_resp("list_changed_files", {}, call_id="c2"),
+        _final_resp('{"dimensions": [{"dimension": "summary"},{"dimension": "security"}], '
+                    '"overall_risk_hint": "MEDIUM"}'),
+    ])
+    planner = PlannerAgent(snap, client=fake, max_steps=6)
+    plan = await planner.plan()
+    dims = {d.dimension for d in plan.dimensions}
+    assert ReviewDimension.SUMMARY in dims
+    assert ReviewDimension.SECURITY in dims
 
 
 # ---------------------------------------------------------------------------
@@ -96,16 +126,13 @@ async def test_planner_executes_tool_then_finalizes():
 async def test_planner_fallback_on_max_steps():
     """LLM 一直调工具不终止 → 超步数降级为全维度计划。"""
     snap = _make_snapshot()
-    # 每步都调工具，永不 FINAL
+    # 每步都调工具，永不给最终文本
     fake = FakeLLMClient([
-        'TOOL_CALL: {"name": "get_pr_overview", "arguments": {}}',
-        'TOOL_CALL: {"name": "list_changed_files", "arguments": {}}',
-        'TOOL_CALL: {"name": "detect_tech_stack", "arguments": {}}',
-        'TOOL_CALL: {"name": "get_pr_overview", "arguments": {}}',
+        _tool_call_resp("get_pr_overview", {}, call_id=f"c{i}")
+        for i in range(4)
     ])
     planner = PlannerAgent(snap, client=fake, max_steps=4)
     plan = await planner.plan()
-    # 降级计划应包含全部 4 个维度
     dims = {d.dimension for d in plan.dimensions}
     assert dims == {
         ReviewDimension.SUMMARY,
@@ -122,7 +149,7 @@ async def test_planner_fallback_on_llm_failure():
     from app.core.llm import LLMClientError
 
     class FailClient:
-        async def chat(self, *a, **k):  # noqa: ARG002
+        async def chat_with_tools(self, *a, **k):  # noqa: ARG002
             raise LLMClientError("down")
 
     snap = _make_snapshot()
@@ -134,16 +161,14 @@ async def test_planner_fallback_on_llm_failure():
 
 @pytest.mark.asyncio
 async def test_planner_fallback_on_unparseable_final():
-    """LLM 输出无法解析的 FINAL_ANSWER → 多次重试后降级。"""
+    """LLM 最终文本无法解析为 JSON → 多次重试后降级。"""
     snap = _make_snapshot()
     fake = FakeLLMClient([
-        "FINAL_ANSWER: 这不是 JSON",  # 解析失败
-        "FINAL_ANSWER: 仍然不是 json",  # 再失败
+        _final_resp("这不是 JSON"),
+        _final_resp("仍然不是 json"),
     ])
     planner = PlannerAgent(snap, client=fake, max_steps=3)
     plan = await planner.plan()
-    # 重试用尽后，要么拿到兜底单 summary 计划（_parse_plan 内部兜底），要么 fallback
-    # 这里 max_steps=3 且每次都 is_final，重试到步数用尽 → fallback_plan
     assert plan.dimensions  # 至少有一个维度
 
 
@@ -152,7 +177,7 @@ async def test_planner_guarantees_summary_dimension():
     """解析出的计划若维度为空 → 至少保证 summary 维度（_parse_plan 内部兜底）。"""
     snap = _make_snapshot()
     fake = FakeLLMClient([
-        'FINAL_ANSWER: {"dimensions": [], "overall_risk_hint": "LOW"}'
+        _final_resp('{"dimensions": [], "overall_risk_hint": "LOW"}')
     ])
     planner = PlannerAgent(snap, client=fake, max_steps=3)
     plan = await planner.plan()

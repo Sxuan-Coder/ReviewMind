@@ -37,6 +37,8 @@ class AgentStep:
     两种互斥形态：
     - ``is_final=True``：LLM 认为信息足够，产出最终文本（``final_text``）；
     - ``is_final=False``：LLM 要调用工具（``tool_call``），等待执行后继续循环。
+    - ``reasoning_content``：推理模型（如 deepseek-v4-flash）的思维链，多轮回灌时
+      必须带回，否则 API 报 400。仅工具调用步有意义。
     """
 
     is_final: bool
@@ -44,6 +46,7 @@ class AgentStep:
     tool_call: ToolCall | None = None
     # 该步原始的 assistant 文本（用于 reasoning 追踪，可选）
     reasoning: str = ""
+    reasoning_content: str | None = None
 
 
 class LLMDriver:
@@ -64,41 +67,60 @@ class LLMDriver:
         self._temperature = temperature
         self.max_steps = max_steps
 
-    async def step(self, messages: list[dict[str, str]]) -> AgentStep:
-        """执行一次 LLM 交互并解析为 AgentStep。"""
+    async def step(self, messages: list[dict[str, Any]]) -> AgentStep:
+        """执行一次 LLM 交互并解析为 AgentStep。
+
+        决策优先级：
+        1. 原生 tool_calls（OpenAI Function Calling）—— 主路径，最可靠
+        2. 文本解析（FINAL_ANSWER / TOOL_CALL 标记）—— 兜底，用于不支持原生 tools 的模型
+        """
         tools_schema = self._registry.to_openai_schemas()
 
-        # 尝试 1：带 tools 字段调用（OpenAI 原生 tool_calls）
         try:
-            raw_response, native_tool_calls = await self._chat_with_tools(messages, tools_schema)
-            if native_tool_calls is not None:
-                return native_tool_calls
-            # 没拿到原生 tool_calls，回退到文本解析
-            return self._parse_from_text(raw_response)
+            response = await self._chat_with_tools(messages, tools_schema)
         except LLMClientError:
             # LLM 调用本身失败 —— 上层 Loop 负责降级，这里向上抛
             raise
-        except Exception as exc:  # noqa: BLE001 — 解析层要兜底，避免 Loop 卡死
-            logger.warning("[LLM_DRIVER] step parse failed: %s: %s", type(exc).__name__, exc)
-            # 兜底：视为最终结果（让 Loop 安全退出），把原始异常记进日志
-            return AgentStep(is_final=True, final_text="", reasoning=f"parse_error: {exc}")
+
+        # 主路径：原生 tool_calls
+        if response.has_tool_calls:
+            # 取第一个工具调用（本项目 Planner 每步单工具）
+            tc = response.tool_calls[0]
+            # 仅接受已注册工具，避免 LLM 编造导致 Loop 发散
+            if self._registry.get(tc.name) is None:
+                logger.warning("[LLM_DRIVER] unknown tool from native tool_calls: %s", tc.name)
+                return AgentStep(
+                    is_final=True,
+                    final_text=response.content or "",
+                    reasoning=f"unknown_tool: {tc.name}",
+                )
+            return AgentStep(
+                is_final=False,
+                tool_call=ToolCall(name=tc.name, arguments=tc.arguments, id=tc.id),
+                reasoning=response.content or "",
+                reasoning_content=response.reasoning_content,
+            )
+
+        # 模型未调工具 → 给出文本结论。优先直接用 content 作为最终答案。
+        content = response.content or ""
+        if content.strip():
+            return AgentStep(is_final=True, final_text=content, reasoning=content)
+
+        # content 也为空（极少见）→ 走文本解析兜底
+        return self._parse_from_text(content)
 
     async def _chat_with_tools(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         tools_schema: list[dict[str, Any]],
-    ) -> tuple[str, AgentStep | None]:
-        """调用 LLM。优先尝试原生 tool_calls；不支持时退化为纯文本。"""
-        # 现有 llm_client.chat 返回纯文本 content。原生 tool_calls 需要原始 JSON，
-        # 当前 client 暂未透出。为保持兼容，这里先用纯文本通道（绝大多数场景已够用），
-        # 并预留扩展点：当 client 支持 tool_calls 时可在此短路。
-        # NOTE: 这是有意为之的渐进式设计——文本解析通道已能覆盖 tool 调用解析。
-        content = await self._client.chat(
+    ):
+        """调用 LLM 的原生工具调用接口。"""
+        return await self._client.chat_with_tools(
             messages,
+            tools=tools_schema,
             model=self._model,
             temperature=self._temperature,
         )
-        return content, None
 
     # ------------------------------------------------------------------
     # 文本解析通道：从 LLM 纯文本回复中提取「最终答案」或「工具调用」

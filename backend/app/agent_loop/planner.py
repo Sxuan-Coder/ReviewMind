@@ -23,23 +23,17 @@ import re
 from typing import Any
 
 from app.agent_loop.agent_tools import build_planner_registry
-from app.agent_loop.llm_driver import LLMDriver
+from app.agent_loop.llm_driver import AgentStep, LLMDriver
 from app.agent_loop.schemas import ContextSnapshot, DimensionTask, ReviewDimension, ReviewPlan
 from app.core.llm import LLMClientError, llm_client
 
 logger = logging.getLogger(__name__)
 
 
-# Planner 的 System Prompt：教 LLM 如何用工具 + 如何产出最终计划
+# Planner 的 System Prompt：教 LLM 用原生工具调用 + 产出最终计划
 PLANNER_SYSTEM = """你是 ReviewMind 的审查计划制定者（Planner）。
 
 你的任务：分析一个 GitHub PR，决定本次需要执行哪些审查维度。
-
-## 可用工具
-你可以调用以下只读工具来了解 PR：
-- get_pr_overview: 获取 PR 标题、作者、变更规模
-- list_changed_files: 列出变更文件
-- detect_tech_stack: 检测项目技术栈
 
 ## 审查维度
 你可以在最终计划中选择以下维度的子集：
@@ -53,14 +47,10 @@ PLANNER_SYSTEM = """你是 ReviewMind 的审查计划制定者（Planner）。
 2. 涉及 auth/payment/config 等敏感路径 → 必须包含 security
 3. 涉及数据库查询/循环/IO → 包含 performance
 4. 涉及 .py/.ts 核心逻辑 → 考虑 test
-5. 避免无谓调用工具：信息够就尽快给出最终答案
+5. 信息不够时，可以调用工具了解 PR；信息够了就尽快给出最终计划
 
-## 输出格式
-当你需要调用工具时，输出：
-TOOL_CALL: {"name": "工具名", "arguments": {...}}
-
-当你信息足够、准备给出最终计划时，输出：
-FINAL_ANSWER: <一段 JSON>，JSON 必须是如下结构：
+## 输出要求
+当你决定好审查计划后，直接用如下 JSON 结构回答（不要包裹在 markdown 代码块里）：
 {"dimensions": [{"dimension": "summary", "use_rag": false, "rationale": "..."}, ...], "overall_risk_hint": "LOW/MEDIUM/HIGH", "reasoning": "一句话说明你的决策依据"}
 
 注意：dimensions 列表至少包含 summary 维度。"""
@@ -76,6 +66,7 @@ class PlannerAgent:
         client: Any | None = None,
         model: str | None = None,
         max_steps: int = 4,
+        on_step: Any | None = None,
     ) -> None:
         self._snapshot = snapshot
         registry = build_planner_registry(snapshot)
@@ -87,6 +78,9 @@ class PlannerAgent:
             max_steps=max_steps,
         )
         self._max_steps = max_steps
+        # 可观测回调：每步决策时调用 on_step(step_no, step, tool_result)
+        # 供冒烟脚本/调试使用，不影响主流程。
+        self._on_step = on_step
 
     async def plan(self) -> ReviewPlan:
         """运行 ReAct 循环，产出审查计划。
@@ -104,36 +98,75 @@ class PlannerAgent:
             return self.fallback_plan(reason=f"planner_error: {exc}")
 
     async def _run_loop(self) -> ReviewPlan:
-        """主 ReAct 循环。"""
-        messages: list[dict[str, str]] = [
+        """主 ReAct 循环（OpenAI 原生 Function Calling 多轮协议）。"""
+        messages: list[dict[str, Any]] = [
             {"role": "system", "content": PLANNER_SYSTEM},
             {"role": "user", "content": self._build_initial_user_msg()},
         ]
 
         for step_no in range(self._max_steps):
             step = await self._driver.step(messages)
-            messages.append({"role": "assistant", "content": step.reasoning or step.final_text})
 
             if step.is_final:
+                # 模型给出最终文本 → 记录 assistant 消息并尝试解析计划
+                messages.append({"role": "assistant", "content": step.final_text})
                 plan = self._parse_plan(step.final_text)
                 if plan is not None:
                     logger.info("[PLANNER] plan produced at step %d: %s", step_no, plan.dimension_names())
                     return plan
-                # 解析失败 → 继续循环让 LLM 再试，或最终降级
+                # 解析失败 → 提示模型重新按格式输出
                 logger.warning("[PLANNER] parse failed at step %d, final_text=%.200s", step_no, step.final_text)
                 messages.append({
                     "role": "user",
-                    "content": "上一次输出无法解析为有效的计划 JSON，请严格按格式重新输出 FINAL_ANSWER。",
+                    "content": "上一次输出无法解析为有效的计划 JSON，请直接输出 JSON 计划（不要包裹代码块）。",
                 })
                 continue
 
-            # 非终止：执行工具，把观察回灌给 LLM
+            # 非终止：模型要求调用工具。按 OpenAI 多轮协议回灌：
+            # 1) assistant 消息（带原始 tool_calls 结构）
+            # 2) tool 消息（带 tool_call_id + 工具结果）
             assert step.tool_call is not None
+            messages.append(self._build_assistant_tool_message(step))
             tool_result = await self._execute_tool(step.tool_call.name, step.tool_call.arguments)
-            messages.append({"role": "user", "content": tool_result})
+            messages.append({
+                "role": "tool",
+                "tool_call_id": step.tool_call.id,
+                "content": tool_result,
+            })
+            if self._on_step is not None:
+                await self._on_step(step_no, step, tool_result)
 
         logger.warning("[PLANNER] exceeded max_steps=%d, using fallback plan", self._max_steps)
         return self.fallback_plan(reason="max_steps_exceeded")
+
+    @staticmethod
+    def _build_assistant_tool_message(step: AgentStep) -> dict[str, Any]:
+        """构造 OpenAI 标准的 assistant 消息（含 tool_calls 结构）。
+
+        多轮工具调用协议要求：回灌 tool 结果前，必须有一条带原始 tool_calls 的
+        assistant 消息，且 tool 消息的 tool_call_id 与之对应。
+
+        对于推理模型（如 deepseek-v4-flash），其 thinking mode 要求把上一步的
+        ``reasoning_content`` 一并带回，否则 API 报 400。
+        """
+        msg: dict[str, Any] = {
+            "role": "assistant",
+            "content": step.reasoning or None,
+            "tool_calls": [
+                {
+                    "id": step.tool_call.id if step.tool_call else "",
+                    "type": "function",
+                    "function": {
+                        "name": step.tool_call.name if step.tool_call else "",
+                        "arguments": json.dumps(step.tool_call.arguments, ensure_ascii=False) if step.tool_call else "{}",
+                    },
+                }
+            ],
+        }
+        # 推理模型要求回灌 reasoning_content（仅当存在时携带，避免污染非推理模型）
+        if step.reasoning_content:
+            msg["reasoning_content"] = step.reasoning_content
+        return msg
 
     async def _execute_tool(self, name: str, arguments: dict[str, Any]) -> str:
         """执行一次工具调用并返回给 LLM 的观察文本。"""

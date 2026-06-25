@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from app.agent_loop.llm_driver import AgentStep, LLMDriver
 from app.agent_loop.tools import Tool, ToolCall, ToolRegistry, ToolResult
+from app.core.llm import ToolCallItem, ToolCallResponse
 
 
 # ---------------------------------------------------------------------------
@@ -39,17 +40,38 @@ class BoomTool(Tool[EchoArgs]):
 
 
 class FakeLLMClient:
-    """伪 LLM 客户端：按预设队列返回文本。"""
+    """伪 LLM 客户端：支持原生 chat_with_tools 协议。
 
-    def __init__(self, responses: list[str]) -> None:
+    responses 是 ToolCallResponse 队列；按调用顺序逐个弹出。
+    """
+
+    def __init__(self, responses: list[ToolCallResponse]) -> None:
         self._responses = list(responses)
         self.calls: list[list[dict]] = []
 
-    async def chat(self, messages, *, model=None, temperature=0.0, **kwargs):  # noqa: ARG002
+    async def chat_with_tools(self, messages, *, tools, model=None, temperature=0.0, tool_choice="auto"):  # noqa: ARG002
         self.calls.append(messages)
         if not self._responses:
-            return ""
+            return ToolCallResponse(content="", tool_calls=[], finish_reason="stop")
         return self._responses.pop(0)
+
+    async def chat(self, messages, *, model=None, temperature=0.0, **kwargs):  # noqa: ARG002
+        # 兼容：driver 现在用 chat_with_tools，这里不会被调用
+        return ""
+
+
+def _tool_call_response(name="echo", arguments=None, call_id="call_test") -> ToolCallResponse:
+    """便捷构造一个原生 tool_calls 响应。"""
+    return ToolCallResponse(
+        content=None,
+        tool_calls=[ToolCallItem(id=call_id, name=name, arguments=arguments or {})],
+        finish_reason="tool_calls",
+    )
+
+
+def _final_response(text: str) -> ToolCallResponse:
+    """便捷构造一个最终文本响应（无 tool_calls）。"""
+    return ToolCallResponse(content=text, tool_calls=[], finish_reason="stop")
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +172,7 @@ def test_registry_to_openai_schemas_lists_all():
 # ---------------------------------------------------------------------------
 
 
-def _build_driver(responses: list[str]) -> tuple[LLMDriver, FakeLLMClient]:
+def _build_driver(responses: list[ToolCallResponse]) -> tuple[LLMDriver, FakeLLMClient]:
     reg = ToolRegistry()
     reg.register(EchoTool())
     fake = FakeLLMClient(responses)
@@ -159,8 +181,21 @@ def _build_driver(responses: list[str]) -> tuple[LLMDriver, FakeLLMClient]:
 
 
 @pytest.mark.asyncio
-async def test_driver_parses_final_answer_tag():
-    driver, _ = _build_driver(["FINAL_ANSWER: 只需要 summary 维度"])
+async def test_driver_native_tool_call_parsed():
+    """主路径：原生 tool_calls → AgentStep(is_final=False)。"""
+    driver, _ = _build_driver([_tool_call_response("echo", {"text": "go"})])
+    step = await driver.step([{"role": "user", "content": "q"}])
+    assert step.is_final is False
+    assert step.tool_call is not None
+    assert step.tool_call.name == "echo"
+    assert step.tool_call.arguments == {"text": "go"}
+    assert step.tool_call.id == "call_test"  # 原生 id 透传
+
+
+@pytest.mark.asyncio
+async def test_driver_native_final_text_parsed():
+    """主路径：无 tool_calls + 有 content → 最终文本。"""
+    driver, _ = _build_driver([_final_response("只需要 summary 维度")])
     step = await driver.step([{"role": "user", "content": "q"}])
     assert step.is_final is True
     assert step.tool_call is None
@@ -168,51 +203,20 @@ async def test_driver_parses_final_answer_tag():
 
 
 @pytest.mark.asyncio
-async def test_driver_parses_tool_call_inline():
-    driver, _ = _build_driver([
-        '思考：先看文件。TOOL_CALL: {"name": "echo", "arguments": {"text": "go"}}'
-    ])
+async def test_driver_rejects_unregistered_native_tool():
+    """原生返回未注册工具名 → 视为最终结果，保证 Loop 不发散。"""
+    driver, _ = _build_driver([_tool_call_response("nonexistent", {})])
     step = await driver.step([{"role": "user", "content": "q"}])
-    assert step.is_final is False
-    assert step.tool_call is not None
-    assert step.tool_call.name == "echo"
-    assert step.tool_call.arguments == {"text": "go"}
-
-
-@pytest.mark.asyncio
-async def test_driver_parses_tool_call_in_code_block():
-    driver, _ = _build_driver([
-        '分析中...\n```json\n{"name": "echo", "arguments": {"text": "x"}}\n```'
-    ])
-    step = await driver.step([{"role": "user", "content": "q"}])
-    assert step.is_final is False
-    assert step.tool_call is not None
-    assert step.tool_call.name == "echo"
-
-
-@pytest.mark.asyncio
-async def test_driver_rejects_unregistered_tool():
-    driver, _ = _build_driver(['TOOL_CALL: {"name": "nonexistent", "arguments": {}}'])
-    step = await driver.step([{"role": "user", "content": "q"}])
-    # 未知工具不应被解析为 tool_call → 退化为最终结果，保证 Loop 不发散
     assert step.is_final is True
 
 
 @pytest.mark.asyncio
 async def test_driver_empty_response_becomes_final():
-    driver, _ = _build_driver([""])
+    """content 为空且无 tool_calls → 视为最终结果。"""
+    driver, _ = _build_driver([_final_response("")])
     step = await driver.step([{"role": "user", "content": "q"}])
     assert step.is_final is True
     assert step.final_text == ""
-
-
-@pytest.mark.asyncio
-async def test_driver_plain_text_without_markers_treated_as_final():
-    """没有 TOOL_CALL 也没有 FINAL_ANSWER 的纯文本 → 安全视为最终答案。"""
-    driver, _ = _build_driver(["这就是我的结论，不需要再调工具。"])
-    step = await driver.step([{"role": "user", "content": "q"}])
-    assert step.is_final is True
-    assert "结论" in step.final_text
 
 
 @pytest.mark.asyncio
@@ -221,7 +225,7 @@ async def test_driver_llm_failure_propagates():
     from app.core.llm import LLMClientError
 
     class FailClient:
-        async def chat(self, *a, **k):  # noqa: ARG002
+        async def chat_with_tools(self, *a, **k):  # noqa: ARG002
             raise LLMClientError("down")
 
     reg = ToolRegistry()
