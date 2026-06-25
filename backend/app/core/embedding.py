@@ -24,6 +24,9 @@ class EmbeddingClient:
         self._api_base = settings.embedding_api_base.rstrip("/")
         self._model = settings.embedding_model
         self._dimensions = settings.embedding_dimensions
+        # 部分供应商（如 Gitee Serverless）需要额外 header 启用容灾切换。
+        # 通过 embedding_extra_headers 配置，格式为 JSON 字符串，未配置则为空。
+        self._extra_headers: dict[str, str] = settings.embedding_extra_headers
 
     @property
     def is_configured(self) -> bool:
@@ -35,19 +38,23 @@ class EmbeddingClient:
             raise EmbeddingClientError("No embedding API key configured")
 
         api_url = f"{self._api_base}/embeddings"
-        headers = {
+        headers: dict[str, str] = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
         }
+        # 合并供应商专属 header（如 Gitee 的 X-Failover-Enabled）
+        headers.update(self._extra_headers)
         payload: dict[str, Any] = {
             "model": self._model,
             "input": texts,
-            "dimensions": self._dimensions,
         }
+        # dimensions 仅在配置非零时携带（部分模型固定维度，传错会报错）
+        if self._dimensions:
+            payload["dimensions"] = self._dimensions
 
         logger.info(
-            "[Embedding] Calling API | url=%s model=%s texts=%d",
-            api_url, self._model, len(texts),
+            "[Embedding] Calling API | url=%s model=%s texts=%d dims=%s",
+            api_url, self._model, len(texts), self._dimensions or "default",
         )
 
         try:
