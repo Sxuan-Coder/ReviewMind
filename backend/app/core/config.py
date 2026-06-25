@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     rag_max_snippet_chars: int = 2000
     rag_cache_ttl_seconds: int = 3600
 
+    # Agent Loop 开关：启用后 ReviewGraph 委托给 ReviewOrchestrator（Planner→Executor→Finalizer）。
+    # 默认关闭，保留原有编排路径，便于灰度验证与回滚。
+    review_use_agent_loop: bool = False
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
