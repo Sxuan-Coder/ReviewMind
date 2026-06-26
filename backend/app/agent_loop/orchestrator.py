@@ -101,7 +101,18 @@ class ReviewOrchestrator:
 
         # ---- 第三阶段：Planner 决策 ----
         await self._progress(job.job_id, "PLANNER", 70, "Planner 正在制定审查计划")
-        planner = PlannerAgent(snapshot)
+
+        # 通过 on_step 回调把 Planner 的工具调用过程实时推给前端
+        async def on_planner_step(step_no, step, tool_result):
+            tc = step.tool_call
+            if tc:
+                tool_args = ", ".join(f"{k}={v}" for k, v in tc.arguments.items()) if tc.arguments else ""
+                await self._progress(
+                    job.job_id, "PLANNER", 70,
+                    f"调用工具 {tc.name}({tool_args}) — 第 {step_no + 1} 步",
+                )
+
+        planner = PlannerAgent(snapshot, on_step=on_planner_step)
         plan = await planner.plan()
         if plan.reasoning:
             logger.info("[ORCHESTRATOR] planner decision: %s", plan.reasoning)
