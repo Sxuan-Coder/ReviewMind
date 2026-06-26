@@ -93,7 +93,17 @@ class ReviewGraph:
         self._github_client = github_client or GitHubClient()
 
     async def run(self, job: ReviewJob, config: dict[str, Any] | None = None) -> ReviewGraphResult:
-        """执行完整的 review graph 工作流。"""
+        """执行完整的 review graph 工作流。
+
+        当 ``settings.review_use_agent_loop`` 开启时，委托给 ReviewOrchestrator
+        （Agent Loop：Planner → Executor → Finalizer）；否则走原有编排路径。
+        两种路径返回结构兼容的 ReviewGraphResult，对外接口不变。
+        """
+        from app.core.config import settings
+
+        if settings.review_use_agent_loop:
+            return await self._run_via_orchestrator(job, config)
+
         state = ReviewGraphState(job_id=job.job_id, pr_url=job.pr_url, config=config or {})
         await self._store.update_status(job.job_id, ReviewJobStatus.running)
         logger.info("[GRAPH] Starting pipeline | job=%s pr_url=%s nodes=%d", job.job_id, job.pr_url, len(_NODE_ORDER))
@@ -143,6 +153,21 @@ class ReviewGraph:
 
         await self._finish(job.job_id, state)
         return ReviewGraphResult(pr_info=state.pr_info, filtered_files=state.filtered_files, parsed_diff=state.parsed_diff, warnings=state.warnings)
+
+    async def _run_via_orchestrator(
+        self, job: ReviewJob, config: dict[str, Any] | None
+    ) -> ReviewGraphResult:
+        """委托给 Agent Loop（ReviewOrchestrator）执行。"""
+        from app.agent_loop.orchestrator import ReviewOrchestrator
+
+        orchestrator = ReviewOrchestrator(self._store, self._github_client)
+        result = await orchestrator.run(job, config=config)
+        return ReviewGraphResult(
+            pr_info=result.pr_info,
+            filtered_files=result.filtered_files,
+            parsed_diff=result.parsed_diff,
+            warnings=result.warnings,
+        )
 
     async def _run_node(self, node_name: str, state: ReviewGraphState) -> ReviewGraphState:
         gc = self._github_client
