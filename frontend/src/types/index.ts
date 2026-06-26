@@ -168,6 +168,11 @@ export type StepType =
   | 'TEST_AGENT'
   | 'RISK_JUDGE'
   | 'REPORT_AGENT'
+  // Planner → Executor → Finalizer
+  | 'PLANNER'
+  | 'PLANNER_DONE'
+  | 'EXECUTOR'
+  | 'FINALIZER'
   | 'DONE';
 
 export interface ProgressEvent {

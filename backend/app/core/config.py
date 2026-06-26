@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     embedding_api_base: str = "https://ai.sxuan.top/v1"
     embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int = 1536
+    # Embedding 供应商专属 header（JSON 字符串），如 Gitee 容灾：'{"X-Failover-Enabled":"true"}'
+    embedding_extra_headers: dict[str, str] = {}
 
     # RAG 分级触发阈值
     rag_light_min_files: int = 5
@@ -43,6 +45,10 @@ class Settings(BaseSettings):
     rag_top_k_full: int = 5
     rag_max_snippet_chars: int = 2000
     rag_cache_ttl_seconds: int = 3600
+
+    # Agent Loop 开关：启用后 ReviewGraph 委托给 ReviewOrchestrator（Planner→Executor→Finalizer）。
+    # 默认关闭，保留原有编排路径，便于灰度验证与回滚。
+    review_use_agent_loop: bool = False
 
     model_config = SettingsConfigDict(
         env_file=".env",

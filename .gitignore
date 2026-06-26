@@ -36,3 +36,4 @@ docs/review-pipeline-optimization.md
 *.md
 *.jsonl
 docs/
+.VSCodeCounter/
