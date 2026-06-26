@@ -205,6 +205,28 @@ graph LR
 
 **设计决策**：预处理阶段串行是因为后续节点依赖前置节点的输出（如 AST 上下文依赖 Diff 解析结果）；四个审查 Agent 之间无数据依赖，因此并行执行以降低总耗时；后处理串行是因为 Risk Judge 需要聚合所有 Agent 输出。
 
+### Agent Loop 灰度编排
+
+可选的 Agent Loop 编排路径，用于把原有固定图流程升级为更接近真实 Agent 的「规划 → 执行 → 聚合」闭环：
+
+```text
+ReviewGraph
+  └─ ReviewOrchestrator（通过 REVIEW_USE_AGENT_LOOP 灰度开关接入）
+      ├─ PlannerAgent：基于 PR 上下文生成审查计划
+      ├─ Executor：按审查维度并行执行工具化审查
+      └─ Finalizer：聚合维度结果并生成最终报告
+```
+
+这条路径默认关闭，保留原有 LangGraph 编排作为稳定路径。开启后，Planner 使用 OpenAI 原生 Function Calling 调用工具，而不是只依赖一次性 Prompt 输出。
+
+配套能力包括：
+
+- `Tool` 抽象与 LLM 工具调用驱动。
+- 复用现有审查 service 的 Planner / Executor 工具集。
+- Planner ReAct 多轮规划循环。
+- Executor 并行执行与 Finalizer 结果聚合。
+- `scripts/smoke_test_agent_loop.py` 端到端冒烟脚本，用于验证真实 LLM 工具调用链路。
+
 ### 上下文获取策略
 
 ReviewMind 的核心竞争力在于「给 LLM 看到正确的上下文」。我们设计了三层上下文获取策略：
@@ -381,34 +403,49 @@ docker-compose up --build -d
 ### 环境变量配置
 
 可通过 `backend/.env` 文件或环境变量覆盖默认配置：
+| 变量                       | 默认值        | 说明                                  |
+| -------------------------- | ------------- | ------------------------------------- |
+| `POSTGRES_DB`              | reviewmind    | 数据库名                              |
+| `POSTGRES_PORT`            | 5432          | PostgreSQL 端口                       |
+| `BACKEND_PORT`             | 8000          | 后端 API 端口                         |
+| `FRONTEND_PORT`            | 80            | 前端访问端口                          |
+| `REDIS_PASSWORD`           | (空)          | Redis 密码                            |
+| `REVIEW_USE_AGENT_LOOP`    | false         | 是否启用 Agent 灰度编排路径      |
+| `EMBEDDING_API_BASE`       | ai.sxuan.top  | OpenAI 兼容向量模型服务地址           |
+| `EMBEDDING_MODEL`          | text-embedding-3-small | 向量模型名称                  |
+| `EMBEDDING_DIMENSIONS`     | 1536          | 向量维度                              |
+| `EMBEDDING_EXTRA_HEADERS`  | {}            | 向量服务额外请求头，支持 Gitee 容灾头 |
 
+Gitee Serverless 向量模型配置示例：
 
-| 变量               | 默认值        | 说明            |
-| ---------------- | ---------- | ------------- |
-| `POSTGRES_DB`    | reviewmind | 数据库名          |
-| `POSTGRES_PORT`  | 5432       | PostgreSQL 端口 |
-| `BACKEND_PORT`   | 8000       | 后端 API 端口     |
-| `FRONTEND_PORT`  | 80         | 前端访问端口        |
-| `REDIS_PASSWORD` | (空)        | Redis 密码      |
+```env
+EMBEDDING_API_KEY=your_gitee_access_token_here
+EMBEDDING_API_BASE=https://ai.gitee.com/v1
+EMBEDDING_MODEL=Qwen3-Embedding-8B
+EMBEDDING_DIMENSIONS=1024
+EMBEDDING_EXTRA_HEADERS={"X-Failover-Enabled":"true"}
+```
 
+注意：`Qwen3-Embedding-8B` 固定输出 1024 维，如从 1536 维模型切换，需要按当前数据库方案重建 pgvector 索引。
 
-## 原创性声明
+### Agent Loop 冒烟测试
 
-本项目核心功能均由团队独立设计与实现，包括：
+在 `backend/.env` 配置真实可用的 `LLM_API_KEY`，并关闭 mock：
 
-- GitHub PR 拉取与 Diff 解析流程
-- DiffFilter 降噪策略
-- 轻量 AST 方法级上下文提取（支持 Python / JS / TS / Java）
-- 基于 LangGraph 的多 Agent Review 工作流
-- 多维度专项 Agent Prompt 设计（安全 / 性能 / 测试）
-- Risk Judge 风险仲裁与置信度机制
-- 结构化 Review 报告生成
-- 前端 Agent 进度时间线与 Diff 行级定位交互
+```env
+LLM_MOCK_MODE=false
+REVIEW_USE_AGENT_LOOP=true
+```
 
-本项目开发过程中使用 AI 工具辅助进行代码审查、Bug 排查和文档润色。
-项目核心架构设计、功能实现和测试验证均由本人完成。
+然后在 `backend/` 目录运行：
 
-### 第三方依赖声明
+```bash
+python ../scripts/smoke_test_agent_loop.py <PR_URL>
+```
+
+该脚本会输出 Planner 的工具调用步骤、Executor 维度执行结果和 Finalizer 聚合报告，用于确认 Function Calling 工具链路真实可用。
+
+### 第三方依赖
 
 **后端依赖（Python）：**
 
