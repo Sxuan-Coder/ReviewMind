@@ -302,7 +302,6 @@ ReviewMind 采用「规则 + 上下文」双重误报控制：
 
 | 方向                | 描述                                              | 可行性                                        |
 | ----------------- | ----------------------------------------------- | ------------------------------------------ |
-| **GitHub Bot 集成** | 自动监听 PR 创建事件，异步触发 Review 并将结果回写为 Review Comment | 已有 GitHub API 客户端，扩展 Webhook 即可            |
 | **增量 Review**     | 仅对新 push 的 commit 做增量分析，避免全量重复审查                | 需要缓存已审查的 commit SHA                        |
 | **团队定制规则**        | 支持用户自定义安全规则、误报过滤规则、审查优先级                        | 可基于现有 `_FALSE_POSITIVE_RULES` 扩展为可配置 YAML  |
 | **更多语言支持**        | AST 上下文提取扩展到 Go、Rust、C++                        | 需引入 tree-sitter 或 language-specific parser |
