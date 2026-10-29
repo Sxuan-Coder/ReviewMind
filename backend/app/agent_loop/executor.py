@@ -35,9 +35,9 @@ logger = logging.getLogger(__name__)
 class Executor:
     """按计划并行执行各审查维度。"""
 
-    def __init__(self, snapshot: ContextSnapshot) -> None:
+    def __init__(self, snapshot: ContextSnapshot, github_client: Any | None = None) -> None:
         self._snapshot = snapshot
-        self._analyze_tool = AnalyzeDimensionTool(snapshot)
+        self._analyze_tool = AnalyzeDimensionTool(snapshot, github_client)
 
     async def execute(self, plan: ReviewPlan) -> list[DimensionResult]:
         """并行执行计划中的所有维度任务，返回每个维度的结果。"""
@@ -71,6 +71,7 @@ class Executor:
             {
                 "dimension": task.dimension.value,
                 "use_rag": task.use_rag,
+                "allow_fetch_full_file": task.allow_fetch_full_file,
             }
         )
         if not tool_result.success:

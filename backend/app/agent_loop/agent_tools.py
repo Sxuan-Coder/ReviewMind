@@ -137,6 +137,7 @@ class DetectTechStackTool(Tool[DetectTechStackArgs]):
 class AnalyzeDimensionArgs(BaseModel):
     dimension: ReviewDimension = Field(description="要执行的审查维度")
     use_rag: bool = Field(default=False, description="是否注入 RAG 上下文")
+    allow_fetch_full_file: bool = Field(default=False, description="允许 Worker 在 diff 不足时拉取完整文件")
 
 
 # 维度 → agent 模块的映射（复用现有 agents 包）
@@ -161,23 +162,20 @@ class AnalyzeDimensionTool(Tool[AnalyzeDimensionArgs]):
     )
     args_model = AnalyzeDimensionArgs
 
-    def __init__(self, snapshot: ContextSnapshot) -> None:
+    def __init__(self, snapshot: ContextSnapshot, github_client: Any | None = None) -> None:
         self._snapshot = snapshot
+        self._github_client = github_client
 
     async def _run(self, args: AnalyzeDimensionArgs) -> dict[str, Any]:
         agent_mod = _DIMENSION_AGENTS.get(args.dimension)
         if agent_mod is None:
             return {"dimension": args.dimension.value, "ok": False, "error": "unknown dimension"}
 
-        # 复用现有的 AgentContext 构造方式（与 graph/nodes.py 一致）
-        ctx = AgentContext(
-            pr_info=self._snapshot.pr_info,
-            parsed_diff=self._snapshot.parsed_diff,
-            ast_contexts=self._snapshot.ast_contexts,
-            rag_contexts=self._snapshot.rag_contexts if args.use_rag else [],
-            tech_stack_prompt=self._snapshot.tech_stack_prompt,
-        )
-        result: AgentFindingsResult = await agent_mod.run_async(ctx)
+        # Agentic 升级路径（Phase 1 试点：security 维度）
+        result = await self._try_agentic(args)
+        if result is None:
+            # 降级/未启用：走原有单次调用路径
+            result = await self._run_one_shot(agent_mod, args)
         return {
             "dimension": args.dimension.value,
             "ok": True,
@@ -186,6 +184,49 @@ class AnalyzeDimensionTool(Tool[AnalyzeDimensionArgs]):
             # findings 保留完整结构，供 Finalizer 聚合（这里只回传计数给 LLM 看）
             "_result": result.model_dump(mode="json"),
         }
+
+    async def _try_agentic(self, args: AnalyzeDimensionArgs) -> AgentFindingsResult | None:
+        """若该维度已 agentic 化且开关开启，走 SpecialistAgent ReAct 循环。
+
+        返回 None 表示未启用或已降级，调用方应回退到单次调用路径。
+        """
+        from app.core.config import settings
+
+        if not settings.review_agentic_workers:
+            return None
+        if args.dimension is not ReviewDimension.SECURITY:
+            return None
+
+        from app.agent_loop.specialist import SpecialistAgent, SpecialistError
+        from app.agents.prompts import SECURITY_AGENTIC_SYSTEM
+
+        registry = build_security_worker_registry(
+            self._snapshot,
+            self._github_client,
+            allow_fetch_full_file=args.allow_fetch_full_file,
+        )
+        specialist = SpecialistAgent(
+            system_prompt=SECURITY_AGENTIC_SYSTEM,
+            registry=registry,
+            snapshot=self._snapshot,
+            agent_name="security",
+        )
+        try:
+            return await specialist.analyze()
+        except SpecialistError as exc:
+            logger.warning("[ANALYZE] security agentic loop failed, fallback one-shot: %s", exc)
+            return None
+
+    async def _run_one_shot(self, agent_mod, args: AnalyzeDimensionArgs) -> AgentFindingsResult:
+        """原有单次调用路径（与 graph/nodes.py 的 AgentContext 构造一致）。"""
+        ctx = AgentContext(
+            pr_info=self._snapshot.pr_info,
+            parsed_diff=self._snapshot.parsed_diff,
+            ast_contexts=self._snapshot.ast_contexts,
+            rag_contexts=self._snapshot.rag_contexts if args.use_rag else [],
+            tech_stack_prompt=self._snapshot.tech_stack_prompt,
+        )
+        return await agent_mod.run_async(ctx)
 
 
 class CrossValidateArgs(BaseModel):
@@ -234,6 +275,159 @@ class CrossValidateTool(Tool[CrossValidateArgs]):
 
 
 # ---------------------------------------------------------------------------
+# Specialist Worker 工具（只读上下文探查，供 agentic 维度 Agent 在 ReAct
+# 循环中自主调用）
+# ---------------------------------------------------------------------------
+
+
+class GetFileDiffArgs(BaseModel):
+    filename: str = Field(description="要查看 diff 的文件路径")
+
+
+class GetFileDiffTool(Tool[GetFileDiffArgs]):
+    """查看指定文件的 diff（patch + 变更行号）。"""
+
+    name = "get_file_diff"
+    description = (
+        "获取指定变更文件的 diff 详情：patch 文本与变更行号列表。"
+        "Worker 分析某个文件前应先看它的 diff。"
+    )
+    args_model = GetFileDiffArgs
+
+    def __init__(self, snapshot: ContextSnapshot) -> None:
+        self._snapshot = snapshot
+
+    async def _run(self, args: GetFileDiffArgs) -> dict[str, Any]:
+        for diff in self._snapshot.parsed_diff:
+            if diff.get("file") == args.filename:
+                return {
+                    "file": diff.get("file"),
+                    "additions": diff.get("additions", 0),
+                    "deletions": diff.get("deletions", 0),
+                    "changed_lines": diff.get("changed_lines", []),
+                    "patch": (diff.get("patch") or "")[:8000],
+                }
+        return {"error": f"file not in parsed_diff: {args.filename}"}
+
+
+class GetAstContextArgs(BaseModel):
+    filename: str = Field(description="要查看 AST 上下文的文件路径")
+
+
+class GetAstContextTool(Tool[GetAstContextArgs]):
+    """查看指定文件的 AST 符号级上下文。"""
+
+    name = "get_ast_context"
+    description = (
+        "获取指定文件变更行所处的函数/类等符号上下文（符号名、起止行、代码片段）。"
+        "用于判断变更发生在哪个逻辑单元内。"
+    )
+    args_model = GetAstContextArgs
+
+    def __init__(self, snapshot: ContextSnapshot) -> None:
+        self._snapshot = snapshot
+
+    async def _run(self, args: GetAstContextArgs) -> dict[str, Any]:
+        contexts = [
+            {
+                "file": c.get("file"),
+                "symbol": c.get("symbol"),
+                "start_line": c.get("start_line"),
+                "end_line": c.get("end_line"),
+                "code": (c.get("code") or "")[:3000],
+            }
+            for c in self._snapshot.ast_contexts
+            if isinstance(c, dict) and c.get("file") == args.filename
+        ]
+        if not contexts:
+            return {"error": f"no ast context for: {args.filename}"}
+        return {"file": args.filename, "contexts": contexts[:10]}
+
+
+class SearchSimilarCodeArgs(BaseModel):
+    query: str = Field(description="检索查询：文件路径、符号名或代码片段")
+    top_k: int = Field(default=5, ge=1, le=10, description="返回的最相似片段数，默认 5")
+
+
+class SearchSimilarCodeTool(Tool[SearchSimilarCodeArgs]):
+    """在项目知识库中检索相似代码（RAG）。"""
+
+    name = "search_similar_code"
+    description = (
+        "在项目代码知识库中检索与查询最相似的代码片段（向量检索）。"
+        "用于确认某写法在项目中是否普遍存在、有无同类安全实现可参照。"
+    )
+    args_model = SearchSimilarCodeArgs
+
+    def __init__(self, snapshot: ContextSnapshot, retriever: Any | None = None) -> None:
+        self._snapshot = snapshot
+        self._retriever = retriever
+
+    def _get_retriever(self) -> Any:
+        if self._retriever is None:
+            from app.services.code_retriever import CodeRetriever
+
+            repo_url = self._snapshot.pr_info.get("html_url") or self._snapshot.pr_url
+            self._retriever = CodeRetriever(repo_url=repo_url)
+        return self._retriever
+
+    async def _run(self, args: SearchSimilarCodeArgs) -> dict[str, Any]:
+        try:
+            docs = await self._get_retriever().aretrieve(args.query, top_k=args.top_k)
+        except Exception as exc:  # noqa: BLE001 — RAG 不可用时返回错误信息而非崩溃
+            return {"error": f"rag search failed: {exc}"}
+        return {
+            "query": args.query,
+            "results": [
+                {
+                    "file_path": d.metadata.get("file_path", ""),
+                    "symbol": d.metadata.get("symbol"),
+                    "similarity": d.metadata.get("similarity", 0),
+                    "code": d.page_content[:2000],
+                }
+                for d in docs
+            ],
+        }
+
+
+class FetchFileContentArgs(BaseModel):
+    path: str = Field(description="仓库内文件路径")
+    ref: str | None = Field(default=None, description="git ref（默认 PR head sha）")
+
+
+class FetchFileContentTool(Tool[FetchFileContentArgs]):
+    """拉取仓库中指定文件的完整内容。"""
+
+    name = "fetch_file_content"
+    description = (
+        "从 GitHub 拉取指定文件的完整内容（截断到前 20000 字符）。"
+        "当 diff 片段不足以判断问题时，用它查看完整实现。"
+    )
+    args_model = FetchFileContentArgs
+
+    _MAX_CHARS = 20000
+
+    def __init__(self, snapshot: ContextSnapshot, github_client: Any) -> None:
+        self._snapshot = snapshot
+        self._github_client = github_client
+
+    async def _run(self, args: FetchFileContentArgs) -> dict[str, Any]:
+        info = self._snapshot.pr_info or {}
+        owner = info.get("owner")
+        repo = info.get("repo")
+        if not owner or not repo:
+            return {"error": "pr_info missing owner/repo"}
+        ref = args.ref or (info.get("head") or {}).get("sha")
+        content = await self._github_client.get_file_contents(owner, repo, args.path, ref)
+        return {
+            "path": args.path,
+            "ref": ref or "default",
+            "content": content[: self._MAX_CHARS],
+            "truncated": len(content) > self._MAX_CHARS,
+        }
+
+
+# ---------------------------------------------------------------------------
 # 注册表工厂
 # ---------------------------------------------------------------------------
 
@@ -244,6 +438,22 @@ def build_planner_registry(snapshot: ContextSnapshot) -> ToolRegistry:
     reg.register(GetPrOverviewTool(snapshot))
     reg.register(ListChangedFilesTool(snapshot))
     reg.register(DetectTechStackTool(snapshot))
+    return reg
+
+
+def build_security_worker_registry(
+    snapshot: ContextSnapshot,
+    github_client: Any | None = None,
+    *,
+    allow_fetch_full_file: bool = True,
+) -> ToolRegistry:
+    """构建 Security 维度 Specialist Worker 用的工具注册表（只读上下文工具）。"""
+    reg = ToolRegistry()
+    reg.register(GetFileDiffTool(snapshot))
+    reg.register(GetAstContextTool(snapshot))
+    reg.register(SearchSimilarCodeTool(snapshot))
+    if allow_fetch_full_file and github_client is not None:
+        reg.register(FetchFileContentTool(snapshot, github_client))
     return reg
 
 

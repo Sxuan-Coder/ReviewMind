@@ -13,6 +13,7 @@
 - executor.py  : Executor（按计划并行执行维度分析）
 - finalizer.py : Finalizer（聚合 + 报告，复用现有确定性逻辑）
 - orchestrator.py: ReviewOrchestrator（串联三层，对接 graph 入口）
+- specialist.py: SpecialistAgent（维度级 Agentic Worker，ReAct 循环调用只读工具）
 """
 
 from app.agent_loop.llm_driver import AgentStep, LLMDriver
@@ -23,6 +24,7 @@ from app.agent_loop.schemas import (
     ReviewDimension,
     ReviewPlan,
 )
+from app.agent_loop.specialist import SpecialistAgent, SpecialistError
 from app.agent_loop.tools import Tool, ToolCall, ToolRegistry, ToolResult
 
 __all__ = [
@@ -40,4 +42,7 @@ __all__ = [
     # driver
     "AgentStep",
     "LLMDriver",
+    # specialist worker
+    "SpecialistAgent",
+    "SpecialistError",
 ]

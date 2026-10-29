@@ -51,9 +51,9 @@ PLANNER_SYSTEM = """你是 ReviewMind 的审查计划制定者（Planner）。
 
 ## 输出要求
 当你决定好审查计划后，直接用如下 JSON 结构回答（不要包裹在 markdown 代码块里）：
-{"dimensions": [{"dimension": "summary", "use_rag": false, "rationale": "..."}, ...], "overall_risk_hint": "LOW/MEDIUM/HIGH", "reasoning": "一句话说明你的决策依据"}
+{"dimensions": [{"dimension": "summary", "use_rag": false, "allow_fetch_full_file": false, "rationale": "..."}, ...], "overall_risk_hint": "LOW/MEDIUM/HIGH", "reasoning": "一句话说明你的决策依据"}
 
-注意：dimensions 列表至少包含 summary 维度。"""
+注意：dimensions 列表至少包含 summary 维度。当 security 维度涉及敏感路径且 diff 可能不足以判断时，可将其 allow_fetch_full_file 设为 true（允许该 Agent 拉取完整文件）。"""
 
 
 class PlannerAgent:
