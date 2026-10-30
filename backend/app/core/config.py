@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     # 默认关闭，保留原有编排路径，便于灰度验证与回滚。
     review_use_agent_loop: bool = False
 
+    # Agentic Worker 开关：Agent Loop 路径下，security 维度改走 SpecialistAgent
+    # ReAct 循环（自主调用只读上下文工具）；循环失败自动降级回单次调用。
+    review_agentic_workers: bool = True
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

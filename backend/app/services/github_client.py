@@ -1,3 +1,4 @@
+import base64
 from typing import Any
 
 import httpx
@@ -124,6 +125,34 @@ class GitHubClient:
         async with httpx.AsyncClient(base_url=self.api_base_url, timeout=self.timeout_seconds) as client:
             response = await client.put(path, headers=headers, json=body)
             return _handle_merge_response(response)
+
+    async def get_file_contents(self, owner: str, repo: str, path: str, ref: str | None = None) -> str:
+        """拉取仓库指定路径的文件内容（UTF-8 文本）。
+
+        GET /repos/{owner}/{repo}/contents/{path}?ref=
+
+        Args:
+            owner: 仓库 owner
+            repo: 仓库名
+            path: 文件路径
+            ref: git ref（分支/commit SHA），默认为仓库默认分支
+
+        Returns:
+            base64 解码后的文件文本内容。
+
+        Raises:
+            GitHubClientError: 文件不存在、非文本文件或 API 失败。
+        """
+        query = f"?ref={ref}" if ref else ""
+        payload = await self._get_json(f"/repos/{owner}/{repo}/contents/{path}{query}")
+        if not isinstance(payload, dict):
+            raise GitHubClientError("GitHub contents response is invalid")
+        if payload.get("encoding") != "base64" or not payload.get("content"):
+            raise GitHubClientError(f"File {path} is not a text file or content is missing")
+        try:
+            return base64.b64decode(str(payload["content"])).decode("utf-8")
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise GitHubClientError(f"Failed to decode file {path}: {exc}") from exc
 
     async def _get_json(self, path: str) -> Any:
         headers = {

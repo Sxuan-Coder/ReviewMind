@@ -123,7 +123,7 @@ class ReviewOrchestrator:
 
         # ---- 第四阶段：Executor 并行执行 ----
         await self._progress(job.job_id, "EXECUTOR", 75, f"并行执行 {len(plan.dimensions)} 个维度")
-        executor = Executor(snapshot)
+        executor = Executor(snapshot, self._github_client)
         dimension_results = await executor.execute(plan)
         for dr in dimension_results:
             if not dr.success:
